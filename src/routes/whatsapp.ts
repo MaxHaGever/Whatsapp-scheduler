@@ -78,7 +78,7 @@ router.post("/", async (req, res) => {
 
     console.log(`[INBOUND] from=${from} text="${text}"`);
 
-    await sendTextMessage(from, `Got it ✅ You said: ${text}`);
+    await sendTextMessage(from, `You said: ${text}`);
   } catch (err) {
     // Make sure this doesn't crash your webhook
     console.error("[WEBHOOK_ERROR]", err);
