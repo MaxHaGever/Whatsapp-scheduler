@@ -1,5 +1,5 @@
 import express from "express";
-import whatsappRouter from "./routes/whatsapp";
+import whatsappRoutes from "./routes/whatsapp";
 import googleRoutes from "./routes/google";
 
 export function createApp() {
@@ -7,10 +7,13 @@ export function createApp() {
 
   app.use(express.json());
 
-  app.get("/health", (_req, res) => res.status(200).send("ok"));
+  app.get("/health", (_req, res) => res.send("ok"));
 
-  app.use("/webhook/whatsapp", whatsappRouter);
-  app.use("/api/google", googleRoutes);
+  // WhatsApp webhook
+  app.use("/webhook/whatsapp", whatsappRoutes);
+
+  // Google OAuth + Calendar routes
+  app.use(googleRoutes); // <-- IMPORTANT (mounts /auth/google and /oauth2callback exactly)
 
   return app;
 }
