@@ -118,3 +118,67 @@ export async function bookChosenSlot(fromWaId: string, choice: number): Promise<
 
   return `✅ Booked! ${slot.label}\nEvent id: ${event.data.id}`;
 }
+
+export async function proposeSlotsInWindow(fromWaId: string, timeMinIso: string, timeMaxIso: string, durationMins = 30): Promise<string> {
+  const refreshToken = process.env.GOOGLE_REFRESH_TOKEN;
+  const calendarId = process.env.GOOGLE_CALENDAR_ID || "primary";
+  if (!refreshToken) throw new Error("Missing GOOGLE_REFRESH_TOKEN");
+
+  const calendar = getCalendarClient(refreshToken);
+
+  const startWindow = DateTime.fromISO(timeMinIso).setZone(TZ);
+  const endWindow = DateTime.fromISO(timeMaxIso).setZone(TZ);
+
+  const fb = await calendar.freebusy.query({
+    requestBody: {
+      timeMin: startWindow.toISO(),
+      timeMax: endWindow.toISO(),
+      timeZone: TZ,
+      items: [{ id: calendarId }]
+    }
+  });
+
+  const busy = (fb.data.calendars?.[calendarId]?.busy || []).map(b =>
+    Interval.fromDateTimes(DateTime.fromISO(b.start!, { zone: TZ }), DateTime.fromISO(b.end!, { zone: TZ }))
+  );
+
+  const slots: Slot[] = [];
+  let cursor = startWindow;
+
+  while (cursor < endWindow && slots.length < 3) {
+    // business hours constraint (Sun–Thu is typical in IL; adjust later if you want)
+    const dayStart = cursor.startOf("day").set({ hour: 9, minute: 0 });
+    const dayEnd = cursor.startOf("day").set({ hour: 17, minute: 0 });
+
+    if (cursor < dayStart) cursor = dayStart;
+    if (cursor >= dayEnd) break;
+
+    const slotStart = cursor;
+    const slotEnd = cursor.plus({ minutes: durationMins });
+    if (slotEnd > dayEnd) break;
+
+    const candidate = Interval.fromDateTimes(slotStart, slotEnd);
+    const overlapsBusy = busy.some(b => b.overlaps(candidate));
+
+    if (!overlapsBusy) {
+      slots.push({
+        startIso: slotStart.toISO()!,
+        endIso: slotEnd.toISO()!,
+        label: slotStart.toFormat("ccc dd/MM HH:mm")
+      });
+      cursor = cursor.plus({ minutes: durationMins });
+    } else {
+      cursor = cursor.plus({ minutes: 10 });
+    }
+  }
+
+  if (slots.length === 0) {
+    pendingSlotsByUser.delete(fromWaId);
+    return "לא מצאתי תורים פנויים בחלון הזה. אפשר לנסות יום/שעה אחרים 🙂";
+  }
+
+  pendingSlotsByUser.set(fromWaId, slots);
+
+  const lines = slots.map((s, i) => `${i + 1}) ${s.label}`).join("\n");
+  return `מצאתי 3 אופציות (Asia/Jerusalem):\n${lines}\n\nענו 1, 2 או 3 כדי לקבוע.`;
+}

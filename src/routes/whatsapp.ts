@@ -1,6 +1,11 @@
 import { Router } from "express";
+import { DateTime } from "luxon";
+
 import { sendTextMessage } from "../services/whatsapp";
-import { proposeNextSlots, bookChosenSlot } from "../services/scheduling";
+import { proposeSlotsInWindow, bookChosenSlot } from "../services/scheduling";
+import { extractDateIntent } from "../services/aiDateIntent";
+import { getUserState, setUserState } from "../services/state";
+import { welcomeMessage, askWhenMessage, didntUnderstandDate } from "../services/messages";
 
 const router = Router();
 
@@ -79,23 +84,57 @@ router.post("/", async (req, res) => {
 
     console.log(`[INBOUND] from=${from} text="${text}"`);
 
-    // ---- Scheduling commands ----
-    const trimmed = text.trim().toLowerCase();
+    const state = getUserState(from);
+    const trimmed = text.trim();
 
-    if (trimmed === "slots") {
-      const msg = await proposeNextSlots(from);
-      await sendTextMessage(from, msg);
+    // Language switch command
+    if (trimmed.toLowerCase() === "russian") {
+      setUserState(from, { lang: "ru", stage: "awaiting_request" });
+      await sendTextMessage(from, askWhenMessage("ru"));
       return;
     }
 
+    // First contact: show welcome, then wait for the user's request
+    if (state.stage === "new") {
+      setUserState(from, { stage: "awaiting_request" }); // default Hebrew
+      await sendTextMessage(from, welcomeMessage());
+      return;
+    }
+
+    // Slot choice (1/2/3)
     if (trimmed === "1" || trimmed === "2" || trimmed === "3") {
       const msg = await bookChosenSlot(from, Number(trimmed));
       await sendTextMessage(from, msg);
       return;
     }
 
-    // Default fallback
-    await sendTextMessage(from, `You said: ${text}`);
+    // Otherwise: treat message as “request for an appointment” → AI extracts date intent
+    const intent = await extractDateIntent(trimmed);
+
+    if (!intent.ok) {
+      await sendTextMessage(from, didntUnderstandDate(state.lang));
+      return;
+    }
+
+    if (intent.kind === "single_day") {
+      const day = DateTime.fromISO(intent.date, { zone: "Asia/Jerusalem" });
+      const timeMin = day.startOf("day").toISO()!;
+      const timeMax = day.endOf("day").toISO()!;
+
+      const msg = await proposeSlotsInWindow(from, timeMin, timeMax, 30);
+      await sendTextMessage(from, msg);
+
+      setUserState(from, { stage: "awaiting_slot_choice" });
+      return;
+    }
+
+    if (intent.kind === "range") {
+      const msg = await proposeSlotsInWindow(from, intent.start, intent.end, 30);
+      await sendTextMessage(from, msg);
+
+      setUserState(from, { stage: "awaiting_slot_choice" });
+      return;
+    }
   } catch (err) {
     // Make sure this doesn't crash your webhook
     console.error("[WEBHOOK_ERROR]", err);
