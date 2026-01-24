@@ -13,5 +13,6 @@ export function getOAuth2Client() {
 }
 
 export const GOOGLE_SCOPES = [
-  "https://www.googleapis.com/auth/calendar.events"
+  "https://www.googleapis.com/auth/calendar.events",
+  "https://www.googleapis.com/auth/calendar.readonly"
 ];
