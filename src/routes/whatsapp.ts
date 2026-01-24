@@ -1,5 +1,6 @@
 import { Router } from "express";
 import { sendTextMessage } from "../services/whatsapp";
+import { proposeNextSlots, bookChosenSlot } from "../services/scheduling";
 
 const router = Router();
 
@@ -78,6 +79,22 @@ router.post("/", async (req, res) => {
 
     console.log(`[INBOUND] from=${from} text="${text}"`);
 
+    // ---- Scheduling commands ----
+    const trimmed = text.trim().toLowerCase();
+
+    if (trimmed === "slots") {
+      const msg = await proposeNextSlots(from);
+      await sendTextMessage(from, msg);
+      return;
+    }
+
+    if (trimmed === "1" || trimmed === "2" || trimmed === "3") {
+      const msg = await bookChosenSlot(from, Number(trimmed));
+      await sendTextMessage(from, msg);
+      return;
+    }
+
+    // Default fallback
     await sendTextMessage(from, `You said: ${text}`);
   } catch (err) {
     // Make sure this doesn't crash your webhook
