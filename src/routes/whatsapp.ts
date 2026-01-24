@@ -3,7 +3,7 @@ import { DateTime } from "luxon";
 
 import { sendTextMessage } from "../services/whatsapp";
 import { proposeSlotsInWindow, bookChosenSlot } from "../services/scheduling";
-import { extractDateIntent } from "../services/aiDateIntent";
+import { extractDateIntent } from "../services/aiDate";
 import { getUserState, setUserState } from "../services/state";
 import { welcomeMessage, askWhenMessage, didntUnderstandDate } from "../services/messages";
 
@@ -50,7 +50,7 @@ router.post("/", async (req, res) => {
     // 1) Ignore delivery/status updates (we only care about incoming messages for now)
     // Status events look like: value.statuses = [...]
     if (value?.statuses?.length) {
-      const s = value.statuses[0];
+      const s: { id?: string; status?: string } = value.statuses[0];
       console.log(`[WA STATUS] id=${s?.id} status=${s?.status}`);
       return;
     }
@@ -111,30 +111,47 @@ router.post("/", async (req, res) => {
     // Otherwise: treat message as “request for an appointment” → AI extracts date intent
     const intent = await extractDateIntent(trimmed);
 
-    if (!intent.ok) {
+    if (intent.needs_clarification || !intent.date) {
       await sendTextMessage(from, didntUnderstandDate(state.lang));
       return;
     }
 
-    if (intent.kind === "single_day") {
-      const day = DateTime.fromISO(intent.date, { zone: "Asia/Jerusalem" });
-      const timeMin = day.startOf("day").toISO()!;
-      const timeMax = day.endOf("day").toISO()!;
+    // Map time preference to a clinic-friendly window
+    const day = DateTime.fromISO(intent.date, { zone: "Asia/Jerusalem" });
+    const pref = intent.time_preference ?? "any";
 
-      const msg = await proposeSlotsInWindow(from, timeMin, timeMax, 30);
-      await sendTextMessage(from, msg);
+    let startHour = 9;
+    let endHour = 17;
 
-      setUserState(from, { stage: "awaiting_slot_choice" });
-      return;
+    if (pref === "morning") {
+      startHour = 9;
+      endHour = 12;
+    } else if (pref === "noon") {
+      startHour = 12;
+      endHour = 14;
+    } else if (pref === "afternoon") {
+      startHour = 14;
+      endHour = 17;
+    } else if (pref === "evening") {
+      startHour = 17;
+      endHour = 20;
+    } else if (pref === "any") {
+      startHour = 9;
+      endHour = 17;
     }
 
-    if (intent.kind === "range") {
-      const msg = await proposeSlotsInWindow(from, intent.start, intent.end, 30);
-      await sendTextMessage(from, msg);
+    const timeMin = day
+      .set({ hour: startHour, minute: 0, second: 0, millisecond: 0 })
+      .toISO()!;
+    const timeMax = day
+      .set({ hour: endHour, minute: 0, second: 0, millisecond: 0 })
+      .toISO()!;
 
-      setUserState(from, { stage: "awaiting_slot_choice" });
-      return;
-    }
+    const msg = await proposeSlotsInWindow(from, timeMin, timeMax, 30);
+    await sendTextMessage(from, msg);
+
+    setUserState(from, { stage: "awaiting_slot_choice" });
+    return;
   } catch (err) {
     // Make sure this doesn't crash your webhook
     console.error("[WEBHOOK_ERROR]", err);
