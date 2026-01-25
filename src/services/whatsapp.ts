@@ -32,7 +32,6 @@ export async function sendTextMessage(to: string, body: string) {
 
     return resp.data;
   } catch (err: any) {
-    // IMPORTANT: Don't log headers (they contain the Bearer token)
     const status = err?.response?.status;
     const data = err?.response?.data;
     console.error("[WHATSAPP_SEND_ERROR]", status, JSON.stringify(data));

@@ -1,6 +1,6 @@
 import express from "express";
-import whatsappRoutes from "./routes/whatsapp";
-import googleRoutes from "./routes/google";
+import whatsappRoutes from "./routes/whatsappRoutes";
+import googleRoutes from "./routes/googleRoutes";
 
 export function createApp() {
   const app = express();

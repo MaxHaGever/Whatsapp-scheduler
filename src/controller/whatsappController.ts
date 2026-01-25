@@ -1,4 +1,4 @@
-import { Router } from "express";
+import type { Request, Response } from "express";
 import { DateTime } from "luxon";
 
 import { sendTextMessage } from "../services/whatsapp";
@@ -7,13 +7,13 @@ import { extractDateIntent } from "../services/aiDate";
 import { getUserState, setUserState } from "../services/state";
 import { welcomeMessage, askWhenMessage, didntUnderstandDate } from "../services/messages";
 
-const router = Router();
+const TZ = "Asia/Jerusalem";
 
 /**
  * GET /webhook/whatsapp
  * Meta webhook verification.
  */
-router.get("/", (req, res) => {
+export function verifyWebhook(req: Request, res: Response) {
   const modeRaw = req.query["hub.mode"];
   const tokenRaw = req.query["hub.verify_token"];
   const challengeRaw = req.query["hub.challenge"];
@@ -29,52 +29,48 @@ router.get("/", (req, res) => {
   }
 
   return res.sendStatus(403);
-});
+}
 
 /**
  * POST /webhook/whatsapp
- * Receives incoming WhatsApp events.
- * IMPORTANT: respond quickly with 200 (Meta retries if you don't).
+ * Receives WhatsApp events.
+ * MUST ack quickly.
  */
-router.post("/", async (req, res) => {
-  // Always ACK immediately (don't block on any logic)
+export async function handleWebhook(req: Request, res: Response) {
+  // ACK immediately
   res.sendStatus(200);
 
   try {
     const body = req.body;
 
-    // WhatsApp Cloud API message payload lives here
     const change = body?.entry?.[0]?.changes?.[0];
     const value = change?.value;
 
-    // 1) Ignore delivery/status updates (we only care about incoming messages for now)
-    // Status events look like: value.statuses = [...]
+    // 1) Status updates (sent/delivered/read)
     if (value?.statuses?.length) {
       const s: { id?: string; status?: string } = value.statuses[0];
       console.log(`[WA STATUS] id=${s?.id} status=${s?.status}`);
       return;
     }
 
-    // 2) Parse incoming message
+    // 2) Incoming message
     const message = value?.messages?.[0];
     if (!message) return;
 
-    const from: string | undefined = message.from; // user's WA ID (digits)
+    const from: string | undefined = message.from;
     const type: string | undefined = message.type;
-
     if (!from) return;
 
-    // Optional safety: in dev sandbox, only reply to your own number
-    // Put your number in .env like: WHATSAPP_TEST_RECIPIENT_WA_ID=9725XXXXXXXX
+    // Optional: restrict to your number in dev
     const allowed = process.env.WHATSAPP_TEST_RECIPIENT_WA_ID;
     if (allowed && from !== allowed) {
       console.log(`[SKIP] from=${from} not in allowed list`);
       return;
     }
 
-    // 3) Handle only text for now
+    // Only text supported now
     if (type !== "text") {
-      console.log(`[INBOUND] from=${from} type=${type} (ignored for now)`);
+      console.log(`[INBOUND] from=${from} type=${type} (ignored)`);
       await sendTextMessage(from, "I can only process text messages for now 🙂");
       return;
     }
@@ -82,10 +78,10 @@ router.post("/", async (req, res) => {
     const text: string | undefined = message?.text?.body;
     if (!text) return;
 
-    console.log(`[INBOUND] from=${from} text="${text}"`);
+    const trimmed = text.trim();
+    console.log(`[INBOUND] from=${from} text="${trimmed}"`);
 
     const state = getUserState(from);
-    const trimmed = text.trim();
 
     // Language switch command
     if (trimmed.toLowerCase() === "russian") {
@@ -94,21 +90,21 @@ router.post("/", async (req, res) => {
       return;
     }
 
-    // First contact: show welcome, then wait for the user's request
+    // First contact → welcome
     if (state.stage === "new") {
-      setUserState(from, { stage: "awaiting_request" }); // default Hebrew
+      setUserState(from, { stage: "awaiting_request" });
       await sendTextMessage(from, welcomeMessage());
       return;
     }
 
-    // Slot choice (1/2/3)
+    // Slot choice
     if (trimmed === "1" || trimmed === "2" || trimmed === "3") {
       const msg = await bookChosenSlot(from, Number(trimmed));
       await sendTextMessage(from, msg);
       return;
     }
 
-    // Otherwise: treat message as “request for an appointment” → AI extracts date intent
+    // Otherwise: interpret as scheduling request
     const intent = await extractDateIntent(trimmed);
 
     if (intent.needs_clarification || !intent.date) {
@@ -116,46 +112,27 @@ router.post("/", async (req, res) => {
       return;
     }
 
-    // Map time preference to a clinic-friendly window
-    const day = DateTime.fromISO(intent.date, { zone: "Asia/Jerusalem" });
+    // Map time preference to a time window
+    const day = DateTime.fromISO(intent.date, { zone: TZ });
     const pref = intent.time_preference ?? "any";
 
     let startHour = 9;
     let endHour = 17;
 
-    if (pref === "morning") {
-      startHour = 9;
-      endHour = 12;
-    } else if (pref === "noon") {
-      startHour = 12;
-      endHour = 14;
-    } else if (pref === "afternoon") {
-      startHour = 14;
-      endHour = 17;
-    } else if (pref === "evening") {
-      startHour = 17;
-      endHour = 20;
-    } else if (pref === "any") {
-      startHour = 9;
-      endHour = 17;
-    }
+    if (pref === "morning") { startHour = 9; endHour = 12; }
+    else if (pref === "noon") { startHour = 12; endHour = 14; }
+    else if (pref === "afternoon") { startHour = 14; endHour = 17; }
+    else if (pref === "evening") { startHour = 17; endHour = 20; }
+    else { startHour = 9; endHour = 17; }
 
-    const timeMin = day
-      .set({ hour: startHour, minute: 0, second: 0, millisecond: 0 })
-      .toISO()!;
-    const timeMax = day
-      .set({ hour: endHour, minute: 0, second: 0, millisecond: 0 })
-      .toISO()!;
+    const timeMin = day.set({ hour: startHour, minute: 0, second: 0, millisecond: 0 }).toISO()!;
+    const timeMax = day.set({ hour: endHour, minute: 0, second: 0, millisecond: 0 }).toISO()!;
 
     const msg = await proposeSlotsInWindow(from, timeMin, timeMax, 30);
     await sendTextMessage(from, msg);
 
     setUserState(from, { stage: "awaiting_slot_choice" });
-    return;
   } catch (err) {
-    // Make sure this doesn't crash your webhook
     console.error("[WEBHOOK_ERROR]", err);
   }
-});
-
-export default router;
+}
