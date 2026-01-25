@@ -1,26 +1,34 @@
-import type { Lang } from "./state";
+import type { Lang } from "../models/UserState";
 
 export function welcomeMessage(): string {
-  // Hebrew + Russian line. Keep it short and clinic-friendly.
-  return [
-    "ברוכים הבאים למרפאה 👋 זהו שירות לקביעת תורים בוואטסאפ.",
-    "אנא כתבו מתי תרצו להגיע (למשל: “בראשון הבא בבוקר”).",
-    "למידע נוסף ניתן לפנות למרפאה.",
-    "",
-    "Для русского языка напишите: russian"
-  ].join("\n");
+  return (
+    "ברוכים הבאים למרפאה 👋\n" +
+    "זהו שירות קביעת תורים בוואטסאפ.\n\n" +
+    "אנא כתבו מתי תרצו להגיע (לדוגמה: 'מחר בבוקר', 'בראשון הבא').\n\n" +
+    "לרוסית כתבו: russian"
+  );
 }
 
 export function askWhenMessage(lang: Lang): string {
-  if (lang === "ru") {
-    return "Пожалуйста, напишите когда вы хотите прийти (например: «в следующее воскресенье утром»).";
-  }
-  return "מעולה 🙂 כתבו בבקשה מתי תרצו להגיע (למשל: “בראשון הבא בבוקר”).";
+  if (lang === "ru") return "Привет! Напишите, пожалуйста, когда вам удобно прийти (например: 'завтра утром').";
+  if (lang === "en") return "Hi! Tell me when you'd like to come (e.g. 'tomorrow morning').";
+  return "מעולה 🙂 כתבו מתי תרצו להגיע (לדוגמה: 'מחר בבוקר', 'בראשון הבא').";
 }
 
 export function didntUnderstandDate(lang: Lang): string {
-  if (lang === "ru") {
-    return "Я не понял дату. Напишите, пожалуйста, так: «завтра», «в воскресенье», или «29/1».";
-  }
-  return "לא הצלחתי להבין את התאריך. אפשר לכתוב למשל: “מחר”, “בראשון”, או “29/1”.";
+  if (lang === "ru") return "Не понял дату. Напишите день более точно (например: 'в следующий понедельник утром').";
+  if (lang === "en") return "I couldn't understand the date. Please try again (e.g. 'next Monday morning').";
+  return "לא הבנתי את התאריך. נסו שוב (למשל: 'בראשון הבא', 'מחר בבוקר').";
+}
+
+export function cancelPrompt(lang: Lang, lines: string[]): string {
+  if (lang === "ru") return `Какую запись отменить?\n${lines.join("\n")}\n\nОтветьте цифрой.`;
+  if (lang === "en") return `Which appointment should I cancel?\n${lines.join("\n")}\n\nReply with the number.`;
+  return `איזה תור לבטל?\n${lines.join("\n")}\n\nהשב/י עם המספר.`;
+}
+
+export function noAppointmentsToCancel(lang: Lang): string {
+  if (lang === "ru") return "Нет ближайших записей для отмены.";
+  if (lang === "en") return "No upcoming appointments to cancel.";
+  return "אין כרגע תורים עתידיים לביטול.";
 }
