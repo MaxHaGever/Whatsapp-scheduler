@@ -3,20 +3,19 @@ import { DateTime } from "luxon";
 
 export type DateIntent = {
   language: "he" | "ru" | "en" | "unknown";
-  // ISO date in Asia/Jerusalem, e.g. "2026-01-28"
+
+  // ISO date in timezone TZ, e.g. "2026-01-28"
   date: string | null;
 
-  // Optional time window preference (not required)
+  // Optional time window preference
   time_preference: "morning" | "noon" | "afternoon" | "evening" | "any" | null;
 
-  // If the user message is ambiguous, AI tells us to ask a follow-up
+  // If ambiguous, AI tells us to ask a follow-up
   needs_clarification: boolean;
   clarification_reason: string | null;
 };
 
-const client = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-});
+const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
 const MODEL = process.env.OPENAI_MODEL || "gpt-4o-mini";
 const TZ = process.env.AI_TIMEZONE || "Asia/Jerusalem";
@@ -27,7 +26,8 @@ export async function extractDateIntent(userText: string): Promise<DateIntent> {
   }
 
   const now = DateTime.now().setZone(TZ);
-  const today = now.toISODate(); // YYYY-MM-DD
+  const todayIso = now.toISODate(); // YYYY-MM-DD
+  const dow = now.weekday; // 1=Mon ... 7=Sun
 
   const schema = {
     type: "object",
@@ -47,22 +47,42 @@ export async function extractDateIntent(userText: string): Promise<DateIntent> {
     required: ["language", "date", "time_preference", "needs_clarification", "clarification_reason"],
   } as const;
 
+  const system =
+    `You extract scheduling date intent from user messages.\n` +
+    `User may write Hebrew/Russian/English.\n` +
+    `Timezone: ${TZ}.\n` +
+    `Today is ${todayIso}. Current weekday number is ${dow} (1=Mon ... 7=Sun).\n\n` +
+    `OUTPUT:\n` +
+    `Return ONLY JSON matching the schema. No prose.\n\n` +
+    `DATE RULES (IMPORTANT):\n` +
+    `A) If the user mentions a weekday (e.g. Hebrew: ראשון/שני/שלישי/רביעי/חמישי/שישי/שבת,\n` +
+    `   or Russian weekday words, or English weekday), you must resolve it to a concrete date.\n\n` +
+    `B) If the user says "next <weekday>" (English) or "בראשון הבא" / "בחמישי הבא" (Hebrew) or "в следующий <день>" (Russian):\n` +
+    `   - Return the NEXT occurrence of that weekday strictly after today.\n` +
+    `   - If today is that weekday, "next" means 7 days later.\n\n` +
+    `C) If the user says "שבוע הבא ביום <weekday>" (Hebrew) or "next week on <weekday>":\n` +
+    `   - Interpret as the weekday in NEXT calendar week (not just the next occurrence).\n` +
+    `   - Week starts Monday. Example: If today is Wed, "שבוע הבא ביום חמישי" refers to Thursday of NEXT week.\n\n` +
+    `D) If the user says only "ביום חמישי" (Hebrew) / "on Thursday" (English) without "next week":\n` +
+    `   - Interpret as the NEXT occurrence of that weekday (could be this week or next).\n\n` +
+    `E) Relative dates:\n` +
+    `   - "מחר" => tomorrow, "מחרתיים" => day after tomorrow.\n` +
+    `   - "היום" => today.\n` +
+    `   - "בסופ\"ש" / "סוף שבוע" => needs_clarification=true unless a specific day is implied.\n\n` +
+    `TIME PREFERENCE RULES:\n` +
+    `- If user mentions "בבוקר" => morning, "בצהריים" => noon, "אחר הצהריים" => afternoon, "בערב" => evening.\n` +
+    `- Otherwise time_preference=null.\n\n` +
+    `CLARIFICATION RULES:\n` +
+    `1) If the user does NOT specify a day/date/weekday (e.g. "יש תורים?") set date=null and needs_clarification=true.\n` +
+    `2) If message is not about scheduling, set date=null and needs_clarification=true.\n` +
+    `3) If you resolve a weekday/date, needs_clarification=false.\n\n` +
+    `LANGUAGE:\n` +
+    `- Detect language: he/ru/en. If unclear => unknown.\n`;
+
   const response = await client.responses.create({
     model: MODEL,
     input: [
-      {
-        role: "system",
-        content:
-          `You extract scheduling date intent from user messages.\n` +
-          `- User may write in Hebrew/Russian/English.\n` +
-          `- Interpret relative dates in timezone ${TZ}.\n` +
-          `- Today is ${today}.\n` +
-          `- Output ONLY the JSON matching the schema.\n` +
-          `Rules:\n` +
-          `1) If the user asks for "next Sunday" / "בראשון הבא" etc, return the correct upcoming date.\n` +
-          `2) If the user does NOT specify a day, set date=null and needs_clarification=true.\n` +
-          `3) If the message is not about scheduling, date=null and needs_clarification=true.\n`,
-      },
+      { role: "system", content: system },
       { role: "user", content: userText },
     ],
     text: {
@@ -75,7 +95,6 @@ export async function extractDateIntent(userText: string): Promise<DateIntent> {
     },
   });
 
-  // The SDK gives us the model output as text; since we forced JSON schema, it should parse cleanly.
   const jsonText = response.output_text?.trim();
   if (!jsonText) throw new Error("OpenAI returned empty output_text");
 
@@ -86,7 +105,6 @@ export async function extractDateIntent(userText: string): Promise<DateIntent> {
     throw new Error(`Failed to parse AI JSON: ${jsonText}`);
   }
 
-  // Extra safety: validate ISO date shape quickly (optional)
   if (parsed.date) {
     const dt = DateTime.fromISO(parsed.date, { zone: TZ });
     if (!dt.isValid) {

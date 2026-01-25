@@ -1,36 +1,32 @@
-import type { Request, Response } from "express";
-import { DateTime } from "luxon";
-
+import { Request, Response } from "express";
 import { sendTextMessage } from "../services/whatsapp";
 import { extractDateIntent } from "../services/aiDate";
-import { proposeSlotsInWindow, bookSlot } from "../services/scheduling";
 import {
-  getOrCreateUserState,
-  setPreferredLanguage,
-  setStage,
-  setPendingSlots,
-  consumePendingSlot,
-  setPendingCancelEvents,
-  consumePendingCancelChoice,
-} from "../services/state";
-import {
-  welcomeMessage,
-  askWhenMessage,
-  didntUnderstandDate,
-  cancelPrompt,
-  noAppointmentsToCancel,
-} from "../services/messages";
-import { listUpcomingBotEventsForUser, deleteEvent } from "../services/calendarOps";
+  proposeNextSlots,
+  bookChosenSlot,
+  listUserAppointments,
+  cancelUserAppointment,
+  Slot,
+} from "../services/scheduling";
 
-const TZ = "Asia/Jerusalem";
+type Lang = "he" | "ru" | "en" | "unknown";
 
-function isCancelCommand(t: string) {
-  const x = t.trim().toLowerCase();
-  return x === "cancel" || x === "בטל" || x === "ביטול" || x.includes("לבטל");
-}
+// simple memory (replace later with Mongo):
+const session = new Map<
+  string,
+  {
+    lang: Lang;
+    lastSlots: Slot[];
+    pendingDateIso: string | null;
+  }
+>();
 
-function isNumberChoice(t: string) {
-  return ["1", "2", "3", "4", "5"].includes(t.trim());
+function getSession(waId: string) {
+  const existing = session.get(waId);
+  if (existing) return existing;
+  const fresh = { lang: "he" as Lang, lastSlots: [], pendingDateIso: null };
+  session.set(waId, fresh);
+  return fresh;
 }
 
 export function verifyWebhook(req: Request, res: Response) {
@@ -47,7 +43,6 @@ export function verifyWebhook(req: Request, res: Response) {
   if (mode === "subscribe" && token === verifyToken && typeof challenge === "string") {
     return res.status(200).send(challenge);
   }
-
   return res.sendStatus(403);
 }
 
@@ -57,14 +52,13 @@ export async function handleWebhook(req: Request, res: Response) {
 
   try {
     const body = req.body;
-
     const change = body?.entry?.[0]?.changes?.[0];
     const value = change?.value;
 
     // Status updates
     if (value?.statuses?.length) {
-      const s: { id?: string; status?: string } = value.statuses[0];
-      console.log(`[WA STATUS] id=${s?.id} status=${s?.status}`);
+      const st = value.statuses[0];
+      console.log(`[WA STATUS] id=${st?.id} status=${st?.status}`);
       return;
     }
 
@@ -75,7 +69,7 @@ export async function handleWebhook(req: Request, res: Response) {
     const type: string | undefined = message.type;
     if (!from) return;
 
-    // Optional dev safety
+    // dev allowlist (optional)
     const allowed = process.env.WHATSAPP_TEST_RECIPIENT_WA_ID;
     if (allowed && from !== allowed) {
       console.log(`[SKIP] from=${from} not in allowed list`);
@@ -83,134 +77,112 @@ export async function handleWebhook(req: Request, res: Response) {
     }
 
     if (type !== "text") {
-      console.log(`[INBOUND] from=${from} type=${type} (ignored)`);
-      await sendTextMessage(from, "אפשר כרגע רק הודעות טקסט 🙂");
+      await sendTextMessage(from, "כרגע אני יודע/ת לטפל רק בהודעות טקסט 🙂");
       return;
     }
 
-    const text: string | undefined = message?.text?.body;
-    if (!text) return;
+    const text: string = message?.text?.body ?? "";
+    console.log(`[INBOUND] from=${from} text="${text}"`);
 
-    const trimmed = text.trim();
-    console.log(`[INBOUND] from=${from} text="${trimmed}"`);
-
-    const user = await getOrCreateUserState(from);
+    const s = getSession(from);
 
     // Language switch
-    if (trimmed.toLowerCase() === "russian") {
-      await setPreferredLanguage(from, "ru");
-      await setStage(from, "awaiting_request");
-      await sendTextMessage(from, askWhenMessage("ru"));
-      return;
-    }
-    if (trimmed.toLowerCase() === "english") {
-      await setPreferredLanguage(from, "en");
-      await setStage(from, "awaiting_request");
-      await sendTextMessage(from, askWhenMessage("en"));
-      return;
-    }
-    if (trimmed === "עברית") {
-      await setPreferredLanguage(from, "he");
-      await setStage(from, "awaiting_request");
-      await sendTextMessage(from, askWhenMessage("he"));
+    if (text.trim().toLowerCase() === "russian") {
+      s.lang = "ru";
+      await sendTextMessage(from, "Отлично! Напишите, когда вы хотите прийти (например: «в следующий вторник утром»).");
       return;
     }
 
-    // First-time welcome
-    if (user.stage === "new") {
-      await setStage(from, "awaiting_request");
-      await sendTextMessage(from, welcomeMessage());
-      return;
-    }
-
-    // CANCEL FLOW
-    if (isCancelCommand(trimmed)) {
-      const events = await listUpcomingBotEventsForUser(from, 5);
-
-      if (!events.length) {
-        await sendTextMessage(from, noAppointmentsToCancel(user.preferredLanguage));
-        await setStage(from, "awaiting_request");
+    // Cancel flow (simple keyword)
+    if (text.includes("לבטל") || text.toLowerCase().includes("cancel")) {
+      const apps = await listUserAppointments({ waId: from, maxResults: 5 });
+      if (apps.length === 0) {
+        await sendTextMessage(from, "לא מצאתי תורים קיימים לביטול.");
         return;
       }
 
-      const lines = events.map((e, i) => {
-        const dt = DateTime.fromISO(e.startIso, { zone: TZ });
-        return `${i + 1}) ${dt.toFormat("ccc dd/LL HH:mm")} — ${e.summary}`;
+      const lines = apps.map((a, idx) => `${idx + 1}) ${a.startIso} — ${a.summary}`);
+      await sendTextMessage(from, `איזה תור לבטל?\n${lines.join("\n")}\nהשב/י עם המספר.`);
+      // store “lastSlots” not relevant here; you'd store list for cancel in DB later
+      // quick hack: store eventIds inside lastSlots label
+      s.lastSlots = apps.map((a) => ({ startIso: a.startIso, endIso: "", label: a.eventId })) as Slot[];
+      return;
+    }
+
+    // If user replied with a number after cancel prompt
+    if (/^\d+$/.test(text.trim()) && s.lastSlots.length && s.lastSlots[0].endIso === "") {
+      const idx = Number(text.trim()) - 1;
+      const picked = s.lastSlots[idx];
+      if (!picked) {
+        await sendTextMessage(from, "מספר לא תקין. נסה/י שוב.");
+        return;
+      }
+      const eventId = picked.label;
+      const result = await cancelUserAppointment({ waId: from, eventId });
+      if (!result.ok) {
+        await sendTextMessage(from, `לא הצלחתי לבטל: ${result.reason}`);
+        return;
+      }
+      await sendTextMessage(from, "✅ התור בוטל.");
+      s.lastSlots = [];
+      return;
+    }
+
+    // If user picks a slot number 1/2/3
+    if (/^[1-3]$/.test(text.trim()) && s.lastSlots.length > 0) {
+      const idx = Number(text.trim()) - 1;
+      const picked = s.lastSlots[idx];
+      if (!picked) {
+        await sendTextMessage(from, "מספר לא תקין. נסה/י שוב.");
+        return;
+      }
+
+      const booked = await bookChosenSlot({
+        waId: from,
+        startIso: picked.startIso,
+        endIso: picked.endIso,
+        summary: "Clinic Appointment",
       });
 
-      await setPendingCancelEvents(from, events.map((e) => e.id));
-      await sendTextMessage(from, cancelPrompt(user.preferredLanguage, lines));
+      await sendTextMessage(from, `✅ נקבע!\n${picked.label}`);
+      // clear pending
+      s.lastSlots = [];
+      s.pendingDateIso = null;
       return;
     }
 
-    // If awaiting cancel choice
-    if (user.stage === "awaiting_cancel_choice" && isNumberChoice(trimmed)) {
-      const eventId = await consumePendingCancelChoice(from, Number(trimmed));
-      if (!eventId) {
-        await sendTextMessage(from, "האפשרויות פגו. שלח/י 'בטל' שוב כדי לראות רשימה חדשה.");
-        return;
-      }
-
-      await deleteEvent(eventId);
-      await sendTextMessage(from, "התור בוטל ✅");
-      return;
-    }
-
-    // If choosing slot
-    if (user.stage === "awaiting_slot_choice" && isNumberChoice(trimmed)) {
-      const slot = await consumePendingSlot(from, Number(trimmed));
-      if (!slot) {
-        await sendTextMessage(from, "האפשרויות פגו. שלח/י שוב בקשה (למשל: 'מחר בבוקר').");
-        return;
-      }
-
-      const confirmText = await bookSlot(from, slot);
-      await sendTextMessage(from, confirmText);
-      return;
-    }
-
-    // Otherwise: interpret as scheduling request via AI
-    const intent = await extractDateIntent(trimmed);
+    // Otherwise: AI extract date intent
+    const intent = await extractDateIntent(text);
+    if (intent.language !== "unknown") s.lang = intent.language;
 
     if (intent.needs_clarification || !intent.date) {
-      await sendTextMessage(from, didntUnderstandDate(user.preferredLanguage));
+      await sendTextMessage(
+        from,
+        s.lang === "ru"
+          ? "Я не понял дату. Напишите, пожалуйста, день (например: «в следующее воскресенье» или «завтра утром»)."
+          : "לא הבנתי את התאריך. כתבו בבקשה יום (לדוגמה: ״בראשון הבא״ / ״מחר בבוקר״)."
+      );
       return;
     }
 
-    const day = DateTime.fromISO(intent.date, { zone: TZ });
+    // Propose slots for that day
+    s.pendingDateIso = intent.date;
+    const slots = await proposeNextSlots({
+      dateIso: intent.date,
+      lang: s.lang,
+    });
 
-    // preference -> window
-    let startHour = 9;
-    let endHour = 17;
-    const pref = intent.time_preference ?? "any";
-
-    if (pref === "morning") {
-      startHour = 9;
-      endHour = 12;
-    } else if (pref === "noon") {
-      startHour = 12;
-      endHour = 14;
-    } else if (pref === "afternoon") {
-      startHour = 14;
-      endHour = 17;
-    } else if (pref === "evening") {
-      startHour = 17;
-      endHour = 20;
+    if (slots.length === 0) {
+      await sendTextMessage(from, "לא מצאתי תורים פנויים ביום הזה. נסו תאריך אחר.");
+      return;
     }
 
-    const timeMin = day.set({ hour: startHour, minute: 0, second: 0, millisecond: 0 }).toISO()!;
-    const timeMax = day.set({ hour: endHour, minute: 0, second: 0, millisecond: 0 }).toISO()!;
+    s.lastSlots = slots;
 
-    const { slots, messageText } = await proposeSlotsInWindow(from, timeMin, timeMax, 30);
+    // ✅ FIX FOR YOUR ERROR: type the callback params (s: Slot)
+    const options = slots.map((slot: Slot, idx: number) => `${idx + 1}) ${slot.label}`);
 
-    // Store slots (so "1/2/3" works after restart)
-    if (slots.length) {
-      await setPendingSlots(from, slots);
-    } else {
-      await setStage(from, "awaiting_request");
-    }
-
-    await sendTextMessage(from, messageText);
+    await sendTextMessage(from, `מצאתי תורים פנויים:\n${options.join("\n")}\nהשב/י עם 1/2/3 כדי לבחור.`);
   } catch (err) {
     console.error("[WEBHOOK_ERROR]", err);
   }
