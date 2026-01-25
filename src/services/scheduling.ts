@@ -1,221 +1,223 @@
-import { google } from "googleapis";
+import { google, calendar_v3 } from "googleapis";
 import { DateTime, Interval } from "luxon";
 import { getOAuth2Client } from "./googleAuth";
 
-const TZ = process.env.APP_TIMEZONE || "Asia/Jerusalem";
+const TZ = process.env.TZ || "Asia/Jerusalem";
 const CALENDAR_ID = process.env.GOOGLE_CALENDAR_ID || "primary";
 
-export type Slot = {
-  startIso: string; // ISO string
-  endIso: string;   // ISO string
-  label: string;    // what we show the user
+// Clinic working hours (edit later)
+const WORK_START_HOUR = Number(process.env.WORK_START_HOUR || 9);   // 09:00
+const WORK_END_HOUR = Number(process.env.WORK_END_HOUR || 17);      // 17:00 (end)
+const SLOT_MINUTES = Number(process.env.SLOT_MINUTES || 30);
+
+export type Slot = { startIso: string; endIso: string; label: string };
+
+export type ListedAppointment = {
+  eventId: string;
+  startIso: string;
+  summary: string;
 };
 
-function fmtSlotLabel(dt: DateTime, lang: "he" | "ru" | "en" | "unknown") {
-  // dd/MM HH:mm always, language only affects day name if you want later
-  const day = dt.toFormat("ccc"); // Tue
-  const date = dt.toFormat("dd/LL");
-  const time = dt.toFormat("HH:mm");
-  return `${day} ${date} ${time}`;
-}
+function calendarClient() {
+  const auth = getOAuth2Client();
 
-function buildOAuthClientWithRefreshToken() {
+  // If you store refresh token in env (single-user setup)
   const refreshToken = process.env.GOOGLE_REFRESH_TOKEN;
   if (!refreshToken) throw new Error("Missing GOOGLE_REFRESH_TOKEN in env");
-  const client = getOAuth2Client();
-  client.setCredentials({ refresh_token: refreshToken });
-  return client;
+
+  auth.setCredentials({ refresh_token: refreshToken });
+
+  return google.calendar({ version: "v3", auth });
+}
+
+function toLuxon(dtIso: string) {
+  return DateTime.fromISO(dtIso, { zone: TZ });
+}
+
+function formatSlotLabel(dt: DateTime, lang: "he" | "ru" | "en") {
+  // You asked: Hebrew should not show Tue 03/02; show יום ראשון 25/01
+  if (lang === "he") {
+    const hebDays = ["יום ראשון", "יום שני", "יום שלישי", "יום רביעי", "יום חמישי", "יום שישי", "יום שבת"];
+    const dayName = hebDays[dt.weekday % 7]; // Luxon: Mon=1..Sun=7. We want Sun=0.
+    // Luxon Sunday=7 -> 7%7 =0 => "יום ראשון" ✅
+    return `${dayName} ${dt.toFormat("dd/LL")} ${dt.toFormat("HH:mm")}`;
+  }
+
+  if (lang === "ru") {
+    // Simple RU formatting
+    return dt.setLocale("ru").toFormat("ccc dd/LL HH:mm");
+  }
+
+  return dt.setLocale("en").toFormat("ccc dd/LL HH:mm");
 }
 
 /**
- * Find available slots for a given date.
- * Uses Google Calendar freeBusy to avoid conflicts (YES: it respects already-booked hours).
+ * Returns busy intervals using freeBusy endpoint
  */
-export async function proposeNextSlots(params: {
-  dateIso: string; // YYYY-MM-DD in TZ
-  lang: "he" | "ru" | "en" | "unknown";
-  slotMinutes?: number;
-  windowStartHour?: number;
-  windowEndHour?: number;
-  maxSlots?: number;
-}): Promise<Slot[]> {
-  const {
-    dateIso,
-    lang,
-    slotMinutes = 30,
-    windowStartHour = 9,
-    windowEndHour = 17,
-    maxSlots = 3,
-  } = params;
+async function fetchBusyIntervals(timeMinIso: string, timeMaxIso: string) {
+  const cal = calendarClient();
 
-  const auth = buildOAuthClientWithRefreshToken();
-  const calendar = google.calendar({ version: "v3", auth });
-
-  const dayStart = DateTime.fromISO(dateIso, { zone: TZ }).set({
-    hour: windowStartHour,
-    minute: 0,
-    second: 0,
-    millisecond: 0,
-  });
-
-  const dayEnd = DateTime.fromISO(dateIso, { zone: TZ }).set({
-    hour: windowEndHour,
-    minute: 0,
-    second: 0,
-    millisecond: 0,
-  });
-
-  // Ask Google what is busy that day
-  const fb = await calendar.freebusy.query({
+  const res = await cal.freebusy.query({
     requestBody: {
-      timeMin: dayStart.toISO(),
-      timeMax: dayEnd.toISO(),
+      timeMin: timeMinIso,
+      timeMax: timeMaxIso,
       timeZone: TZ,
       items: [{ id: CALENDAR_ID }],
     },
   });
 
-  const busy = fb.data.calendars?.[CALENDAR_ID]?.busy ?? [];
+  const busy = res.data.calendars?.[CALENDAR_ID]?.busy || [];
+  return busy
+    .filter(b => b.start && b.end)
+    .map(b => Interval.fromDateTimes(toLuxon(b.start!), toLuxon(b.end!)));
+}
 
-  // Convert busy to Luxon intervals
-  const busyIntervals: Interval[] = busy
-    .map((b) => {
-      if (!b.start || !b.end) return null;
-      const s = DateTime.fromISO(b.start, { zone: TZ });
-      const e = DateTime.fromISO(b.end, { zone: TZ });
-      return Interval.fromDateTimes(s, e);
-    })
-    .filter((x): x is Interval => Boolean(x));
+/**
+ * Build all possible working slots for a day.
+ */
+function buildDaySlots(dayIsoDate: string) {
+  const dayStart = DateTime.fromISO(dayIsoDate, { zone: TZ }).startOf("day");
+  const start = dayStart.set({ hour: WORK_START_HOUR, minute: 0, second: 0, millisecond: 0 });
+  const end = dayStart.set({ hour: WORK_END_HOUR, minute: 0, second: 0, millisecond: 0 });
 
-  // Walk the day and pick free slots
-  const slots: Slot[] = [];
-  let cursor = dayStart;
-
-  while (cursor.plus({ minutes: slotMinutes }) <= dayEnd && slots.length < maxSlots) {
-    const candidate = Interval.fromDateTimes(cursor, cursor.plus({ minutes: slotMinutes }));
-
-    const overlapsBusy = busyIntervals.some((b) => b.overlaps(candidate));
-    if (!overlapsBusy) {
-      slots.push({
-        startIso: candidate.start!.toISO()!,
-        endIso: candidate.end!.toISO()!,
-        label: fmtSlotLabel(candidate.start!, lang),
-      });
-    }
-
-    cursor = cursor.plus({ minutes: slotMinutes });
+  const slots: Interval[] = [];
+  let cursor = start;
+  while (cursor.plus({ minutes: SLOT_MINUTES }) <= end) {
+    slots.push(Interval.fromDateTimes(cursor, cursor.plus({ minutes: SLOT_MINUTES })));
+    cursor = cursor.plus({ minutes: SLOT_MINUTES });
   }
-
   return slots;
 }
 
 /**
- * Book a slot: creates a calendar event.
+ * Remove busy from candidate slots.
  */
-export async function bookChosenSlot(params: {
+function filterFreeSlots(daySlots: Interval[], busy: Interval[]) {
+  return daySlots.filter(slot => !busy.some(b => b.overlaps(slot)));
+}
+
+/**
+ * Propose next slots for a given day ISO date (YYYY-MM-DD)
+ */
+export async function proposeNextSlots(dayIsoDate: string, lang: "he" | "ru" | "en" = "he"): Promise<Slot[]> {
+  const dayStart = DateTime.fromISO(dayIsoDate, { zone: TZ }).startOf("day");
+  const timeMin = dayStart.toISO()!;
+  const timeMax = dayStart.plus({ days: 1 }).toISO()!;
+
+  const busy = await fetchBusyIntervals(timeMin, timeMax);
+  const daySlots = buildDaySlots(dayIsoDate);
+  const free = filterFreeSlots(daySlots, busy).slice(0, 3);
+
+  return free.map((i) => {
+    const s = i.start!;
+    const e = i.end!;
+    return {
+      startIso: s.toISO()!,
+      endIso: e.toISO()!,
+      label: formatSlotLabel(s, lang),
+    };
+  });
+}
+
+/**
+ * Book chosen slot as a calendar event.
+ * Adds wa_id in extendedProperties.private so we can list/cancel by WhatsApp user later.
+ */
+export async function bookChosenSlot(args: {
   waId: string;
-  startIso: string; // ISO
-  endIso: string;   // ISO
+  startIso: string;
+  endIso: string;
   summary?: string;
-  description?: string;
-}): Promise<{ eventId: string }> {
-  const { waId, startIso, endIso, summary = "Clinic Appointment", description = "" } = params;
+}): Promise<{ eventId: string; startIso: string }> {
+  const cal = calendarClient();
 
-  const auth = buildOAuthClientWithRefreshToken();
-  const calendar = google.calendar({ version: "v3", auth });
+  const summary = args.summary || "Clinic Appointment";
 
-  const created = await calendar.events.insert({
+  const res = await cal.events.insert({
     calendarId: CALENDAR_ID,
     requestBody: {
       summary,
-      description,
-      start: { dateTime: startIso, timeZone: TZ },
-      end: { dateTime: endIso, timeZone: TZ },
-
-      // ✅ PUT THIS HERE (you asked where): inside the event body you insert
+      start: { dateTime: args.startIso, timeZone: TZ },
+      end: { dateTime: args.endIso, timeZone: TZ },
       extendedProperties: {
         private: {
-          wa_id: waId,
+          wa_id: args.waId,
           source: "wa-scheduler-bot",
         },
       },
     },
   });
 
-  const eventId = created.data.id;
-  if (!eventId) throw new Error("Failed to create event (missing id)");
+  const eventId = res.data.id;
+  if (!eventId) throw new Error("Event created but id missing");
 
-  return { eventId };
+  return { eventId, startIso: args.startIso };
 }
 
 /**
- * List upcoming appointments for a WhatsApp user (by wa_id tag).
+ * List upcoming appointments for a specific WhatsApp user.
+ * We filter by private extendedProperties.
  */
-export async function listUserAppointments(params: {
-  waId: string;
-  maxResults?: number;
-}): Promise<Array<{ eventId: string; startIso: string; summary: string }>> {
-  const { waId, maxResults = 10 } = params;
+export async function listUpcomingAppointments(waId: string, maxResults = 10): Promise<ListedAppointment[]> {
+  const cal = calendarClient();
 
-  const auth = buildOAuthClientWithRefreshToken();
-  const calendar = google.calendar({ version: "v3", auth });
-
-  const now = DateTime.now().setZone(TZ).toISO();
-
-  const resp = await calendar.events.list({
+  const now = DateTime.now().setZone(TZ).toISO()!;
+  const res = await cal.events.list({
     calendarId: CALENDAR_ID,
-    timeMin: now ?? undefined,
+    timeMin: now,
+    maxResults,
     singleEvents: true,
     orderBy: "startTime",
-    maxResults,
+    privateExtendedProperty: [`wa_id=${waId}`], // <- MUST be string[]
   });
 
-  const items = resp.data.items ?? [];
+  const items = res.data.items || [];
+  return items
+    .filter((e) => e.id && (e.start?.dateTime || e.start?.date))
+    .map((e) => ({
+      eventId: e.id!,
+      startIso: e.start!.dateTime || DateTime.fromISO(e.start!.date!, { zone: TZ }).toISO()!,
+      summary: e.summary || "Clinic Appointment",
+    }));
+}
 
-  // Filter only events created by this bot for this wa_id
-  const mine = items.filter((e) => {
-    const p = e.extendedProperties?.private as Record<string, string> | undefined;
-    return p?.source === "wa-scheduler-bot" && p?.wa_id === waId;
-  });
-
-  return mine
-    .map((e) => {
-      const startIso = e.start?.dateTime ?? e.start?.date ?? "";
-      return {
-        eventId: e.id ?? "",
-        startIso,
-        summary: e.summary ?? "(no title)",
-      };
-    })
-    .filter((x) => x.eventId && x.startIso);
+export async function cancelAppointmentByEventId(eventId: string): Promise<void> {
+  const cal = calendarClient();
+  await cal.events.delete({ calendarId: CALENDAR_ID, eventId });
 }
 
 /**
- * Cancel an appointment by eventId (only if it belongs to this wa_id).
+ * Helper that proposes slots for the next 3 days if requested day has no slots.
  */
-export async function cancelUserAppointment(params: {
-  waId: string;
-  eventId: string;
-}): Promise<{ ok: true } | { ok: false; reason: string }> {
-  const { waId, eventId } = params;
+export async function proposeSlotsWithFallback(args: {
+  dayIsoDate: string;
+  lang: "he" | "ru" | "en";
+}): Promise<{ day: string; slots: Slot[] }[]> {
+  const base = DateTime.fromISO(args.dayIsoDate, { zone: TZ }).startOf("day");
+  const out: { day: string; slots: Slot[] }[] = [];
 
-  const auth = buildOAuthClientWithRefreshToken();
-  const calendar = google.calendar({ version: "v3", auth });
-
-  const ev = await calendar.events.get({
-    calendarId: CALENDAR_ID,
-    eventId,
-  });
-
-  const p = ev.data.extendedProperties?.private as Record<string, string> | undefined;
-  if (p?.source !== "wa-scheduler-bot" || p?.wa_id !== waId) {
-    return { ok: false, reason: "This appointment does not belong to this user." };
+  for (let i = 0; i < 3; i++) {
+    const d = base.plus({ days: i }).toISODate()!;
+    const slots = await proposeNextSlots(d, args.lang);
+    out.push({ day: d, slots });
   }
+  return out;
+}
 
-  await calendar.events.delete({
-    calendarId: CALENDAR_ID,
-    eventId,
-  });
+/* ------------------------------------------------------------------
+   Compatibility exports (so controllers/routes won’t break again)
+------------------------------------------------------------------ */
 
-  return { ok: true };
+export const listUserAppointments = listUpcomingAppointments;
+
+export async function cancelUserAppointmentByIndex(waId: string, index: number): Promise<void> {
+  const appts = await listUpcomingAppointments(waId);
+  const idx = index - 1;
+  if (idx < 0 || idx >= appts.length) throw new Error("Invalid appointment index");
+  await cancelAppointmentByEventId(appts[idx].eventId);
+}
+
+// If older code used bookSlot()
+export async function bookSlot(waId: string, startIso: string, endIso: string) {
+  return bookChosenSlot({ waId, startIso, endIso });
 }
