@@ -182,10 +182,6 @@ export async function handleWebhook(req: Request, res: Response) {
     // ✅ FIX FOR YOUR ERROR: type the callback params (s: Slot)
     const options = slots.map((slot: Slot, idx: number) => `${idx + 1}) ${slot.label}`);
 
-    const BUILD = process.env.APP_BUILD || "no-build";
-
-    await sendTextMessage(from, `(${BUILD}) You said: ${text}`);
-
     await sendTextMessage(from, `מצאתי תורים פנויים:\n${options.join("\n")}\nהשב/י עם 1/2/3 כדי לבחור.`);
   } catch (err) {
     console.error("[WEBHOOK_ERROR]", err);
