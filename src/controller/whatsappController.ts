@@ -1,5 +1,4 @@
 import { Request, Response } from "express";
-import { runSchedulingFlow } from "../flows/schedulingFlow";
 
 import {
   getOrCreateUserState,
@@ -15,9 +14,11 @@ import {
   updateMessageStatusByWaMessageId,
 } from "../services/messageService";
 
-import { welcomeMessage } from "../messages/welcome.messages";
 import { detectLanguageByKeyword, isResetRequest } from "../nlp/commands";
+
 import { runWelcomeFlow } from "../flows/welcomeFlow";
+import { runIdleFlow } from "../flows/idleFlow";
+import { runSchedulingFlow } from "../flows/schedulingFlow";
 
 export async function handleWebhookPost(req: Request, res: Response) {
   // ✅ ACK immediately (Meta requires quick response)
@@ -49,17 +50,14 @@ export async function handleWebhookPost(req: Request, res: Response) {
     const type: string | undefined = message.type;
     if (!waId) return;
 
-    // ✅ Non-text message -> respond with fixed message (stored)
+    // ✅ Non-text message -> respond (stored)
     if (type !== "text") {
-      console.log(`[INBOUND] from=${waId} type=${type} ignored`);
-
       await sendAndStoreTextMessage({
         businessId,
         waId,
         body: "אני יכול לעבד רק הודעות טקסט כרגע 🙂",
         meta: { reason: "non-text", inboundType: type },
       });
-
       return;
     }
 
@@ -69,7 +67,7 @@ export async function handleWebhookPost(req: Request, res: Response) {
 
     console.log(`[INBOUND] from=${waId} text="${textRaw}"`);
 
-    // ✅ Always store inbound text message
+    // ✅ Always store inbound message
     await saveInboundMessage({
       businessId,
       waId,
@@ -78,75 +76,70 @@ export async function handleWebhookPost(req: Request, res: Response) {
       meta: { source: "webhook" },
     });
 
-    // ✅ Load user state
+    // ✅ Load state
     let state = await getOrCreateUserState(waId);
 
-    // ✅ Session expired -> reset conversation stage back to welcome
+    // ✅ Session expired -> reset
     if (isExpired(state)) {
       await resetConversationState(waId);
       state = await getOrCreateUserState(waId);
-      await saveUserState(waId, { stage: "WELCOME" });
     }
 
-    // ✅ Manual reset command
+    // ✅ Manual reset
     if (isResetRequest(textRaw)) {
       await resetConversationState(waId);
       state = await getOrCreateUserState(waId);
 
-      await sendAndStoreTextMessage({
+      await runWelcomeFlow({
         businessId,
         waId,
-        body: welcomeMessage(state.preferredLanguage),
-        meta: { stage: "WELCOME", reason: "manual-reset" },
+        lang: state.preferredLanguage,
+        reason: "manual-reset",
       });
 
       await saveUserState(waId, { stage: "IDLE" });
       return;
     }
 
-    // ✅ Language selection command
+    // ✅ Language selection
     const langPick = detectLanguageByKeyword(textRaw);
     if (langPick) {
       await saveUserState(waId, { preferredLanguage: langPick });
 
-      await sendAndStoreTextMessage({
+      await runWelcomeFlow({
         businessId,
         waId,
-        body: welcomeMessage(langPick),
-        meta: { stage: "WELCOME", lang: langPick },
+        lang: langPick,
+        reason: "language-picked",
       });
 
       await saveUserState(waId, { stage: "IDLE" });
       return;
     }
 
-    // ✅ Route by state
+    // ✅ First time welcome
     if (state.stage === "WELCOME") {
       await runWelcomeFlow({
         businessId,
         waId,
         lang: state.preferredLanguage,
+        reason: "first-welcome",
       });
+
+      await saveUserState(waId, { stage: "IDLE" });
       return;
     }
 
-    // ✅ Step 1: If user is IDLE → run scheduling flow (for testing connection errors)
-    if (state.stage === "IDLE") {
-      await runSchedulingFlow({
-        businessId,
-        waId,
-        text: textRaw,
-      });
+    // ✅ Main routing:
+    // If user is mid scheduling OR they are idle and message looks relevant → run scheduling
+    if (state.stage === "AWAIT_DATE" || state.stage === "AWAIT_SLOT_CHOICE") {
+      await runSchedulingFlow({ businessId, waId, text: textRaw });
       return;
     }
 
-    // ✅ fallback
-    await sendAndStoreTextMessage({
-      businessId,
-      waId,
-      body: "✅ קיבלתי 🙂",
-      meta: { reason: "fallback" },
-    });
+    // ✅ Otherwise idle handler decides whether to start scheduling or just explain
+    await runIdleFlow({ businessId, waId, text: textRaw });
+    return;
   } catch (err) {
     console.error("[WEBHOOK_ERROR]", err);
   }

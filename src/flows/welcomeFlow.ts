@@ -1,18 +1,23 @@
-import { saveUserState } from "../services/state";
 import { sendAndStoreTextMessage } from "../services/messageService";
 import { welcomeMessage } from "../messages/welcome.messages";
+import type { Lang } from "../services/state";
 
 export async function runWelcomeFlow(args: {
   businessId: string;
   waId: string;
-  lang: "he" | "ru" | "en";
+  lang: Lang;
+  reason?: string;
 }) {
-  await sendAndStoreTextMessage({
-    businessId: args.businessId,
-    waId: args.waId,
-    body: welcomeMessage(args.lang),
-    meta: { flow: "welcome" },
-  });
+  const { businessId, waId, lang, reason } = args;
 
-  await saveUserState(args.waId, { stage: "IDLE" });
+  await sendAndStoreTextMessage({
+    businessId,
+    waId,
+    body: welcomeMessage(lang),
+    meta: {
+      stage: "WELCOME",
+      reason: reason ?? "welcome-flow",
+      lang,
+    },
+  });
 }
