@@ -4,17 +4,20 @@ type WhatsAppSendResponse = {
   messages?: Array<{ id: string }>;
 };
 
-export async function sendTextMessage(to: string, body: string): Promise<void> {
+export type WhatsAppSendResult = {
+  waMessageId: string | null;
+  to: string;
+  body: string;
+  sentAt: string;
+};
+
+export async function sendTextMessage(to: string, body: string): Promise<WhatsAppSendResult> {
   const token = process.env.WHATSAPP_TOKEN;
   const phoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID;
 
   if (!token || !phoneNumberId) {
     throw new Error("Missing WHATSAPP_TOKEN or WHATSAPP_PHONE_NUMBER_ID in env.");
   }
-
-  // Build marker (so we can prove which deployment is responding)
-  const build = process.env.APP_BUILD || "NO_BUILD";
-  const finalBody = `[${build}] ${body}`;
 
   // Use latest Graph version (v24.0 is current in your logs)
   const url = `https://graph.facebook.com/v24.0/${phoneNumberId}/messages`;
@@ -26,7 +29,7 @@ export async function sendTextMessage(to: string, body: string): Promise<void> {
         messaging_product: "whatsapp",
         to,
         type: "text",
-        text: { body: finalBody },
+        text: { body },
       },
       {
         headers: {
@@ -43,6 +46,12 @@ export async function sendTextMessage(to: string, body: string): Promise<void> {
     } else {
       console.log(`[WA SEND] to=${to} (no message id returned)`);
     }
+    return {
+      waMessageId: id,
+      to,
+      body,
+      sentAt: new Date().toISOString(),
+    };
   } catch (err: any) {
     // Log useful error details from Meta
     const status = err?.response?.status;
