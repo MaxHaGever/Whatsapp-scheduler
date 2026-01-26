@@ -32,10 +32,9 @@ export function createGoogleProvider(args: {
   return {
     /**
      * Propose available time slots in a given day.
-     * This is a very basic version:
      * - working hours: 09:00–17:00
      * - slot duration: 30 minutes
-     * - finds first N free slots that don't overlap existing events
+     * - returns first N free slots not overlapping existing events
      */
     async proposeSlots({
       dayIsoDate,
@@ -44,7 +43,6 @@ export function createGoogleProvider(args: {
     }: ProposeSlotsArgs): Promise<Slot[]> {
       const slotMinutes = 30;
 
-      // Define working hours
       const startOfDay = DateTime.fromISO(dayIsoDate, { zone: timezone }).set({
         hour: 9,
         minute: 0,
@@ -60,12 +58,13 @@ export function createGoogleProvider(args: {
       });
 
       if (!startOfDay.isValid || !endOfDay.isValid) {
-        throw new Error(`Invalid dayIsoDate or timezone. dayIsoDate=${dayIsoDate}, timezone=${timezone}`);
+        throw new Error(
+          `Invalid dayIsoDate or timezone. dayIsoDate=${dayIsoDate}, timezone=${timezone}`
+        );
       }
 
       const auth = await getClient();
 
-      // Fetch events in that day
       const resp = await calendar.events.list({
         auth,
         calendarId: args.calendarId,
@@ -75,31 +74,28 @@ export function createGoogleProvider(args: {
         orderBy: "startTime",
       });
 
-      // Build busy intervals
-      const busyIntervals: Interval[] =
-        resp.data.items
-          ?.map((ev) => {
-            const s = ev.start?.dateTime;
-            const e = ev.end?.dateTime;
-            if (!s || !e) return null;
+      const items = resp.data.items ?? [];
 
-            const start = DateTime.fromISO(s);
-            const end = DateTime.fromISO(e);
+      // ✅ Build busy intervals (supports dateTime AND all-day date)
+      const busyIntervals: Interval[] = items
+        .map((ev) => {
+          const startRaw = ev.start?.dateTime ?? ev.start?.date;
+          const endRaw = ev.end?.dateTime ?? ev.end?.date;
+          if (!startRaw || !endRaw) return null;
 
-            if (!start.isValid || !end.isValid) return null;
+          const start = DateTime.fromISO(startRaw, { zone: timezone });
+          const end = DateTime.fromISO(endRaw, { zone: timezone });
 
-            return Interval.fromDateTimes(start, end);
-          })
-          .filter((x): x is Interval => Boolean(x)) ?? [];
+          if (!start.isValid || !end.isValid) return null;
+
+          return Interval.fromDateTimes(start, end);
+        })
+        .filter((x): x is Interval => Boolean(x));
 
       const slots: Slot[] = [];
-
       let cursor = startOfDay;
 
-      while (
-        cursor.plus({ minutes: slotMinutes }) <= endOfDay &&
-        slots.length < maxSlots
-      ) {
+      while (cursor.plus({ minutes: slotMinutes }) <= endOfDay && slots.length < maxSlots) {
         const candidate = Interval.fromDateTimes(
           cursor,
           cursor.plus({ minutes: slotMinutes })
@@ -111,7 +107,6 @@ export function createGoogleProvider(args: {
           const start = candidate.start;
           const end = candidate.end;
 
-          // Luxon types allow null here, so guard
           if (start && end) {
             slots.push({
               startIso: start.toISO()!,
@@ -152,7 +147,6 @@ export function createGoogleProvider(args: {
 
     /**
      * List upcoming appointments
-     * (for now returns the next N events; later we can filter by waId in description)
      */
     async listUpcomingAppointments({ waId, limit = 10, timezone }) {
       const auth = await getClient();
@@ -179,10 +173,7 @@ export function createGoogleProvider(args: {
           summary: ev.summary ?? "Appointment",
         }));
 
-      // Optional future filtering:
-      // - Only include events that contain "waId=<id>" in description
-      // For now, keep simple.
-      void waId;
+      void waId; // later we can filter by description containing waId
 
       return appts;
     },
