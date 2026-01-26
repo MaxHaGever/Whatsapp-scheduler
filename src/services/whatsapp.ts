@@ -4,7 +4,14 @@ type WhatsAppSendResponse = {
   messages?: Array<{ id: string }>;
 };
 
-export async function sendTextMessage(to: string, body: string): Promise<void> {
+export type WhatsAppSendResult = {
+  waMessageId: string | null;
+  to: string;
+  body: string;
+  sentAt: string;
+};
+
+export async function sendTextMessage(to: string, body: string): Promise<WhatsAppSendResult> {
   const token = process.env.WHATSAPP_TOKEN;
   const phoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID;
 
@@ -37,12 +44,19 @@ export async function sendTextMessage(to: string, body: string): Promise<void> {
       }
     );
 
-    const id = resp.data?.messages?.[0]?.id;
+    const id = resp.data?.messages?.[0]?.id ?? null;
     if (id) {
       console.log(`[WA SEND] id=${id} to=${to}`);
     } else {
       console.log(`[WA SEND] to=${to} (no message id returned)`);
     }
+
+    return {
+      waMessageId: id,
+      to,
+      body: finalBody,
+      sentAt: new Date().toISOString(),
+    };
   } catch (err: any) {
     // Log useful error details from Meta
     const status = err?.response?.status;

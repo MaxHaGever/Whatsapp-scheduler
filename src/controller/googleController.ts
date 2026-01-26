@@ -1,5 +1,6 @@
 import { Request, Response } from "express";
 import { getOAuth2Client, GOOGLE_SCOPES } from "../services/googleAuth";
+import { welcomeMessage } from "../messages/welcome.messages";
 
 export function startGoogleAuth(req: Request, res: Response) {
   const oauth2 = getOAuth2Client();
