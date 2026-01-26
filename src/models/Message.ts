@@ -21,9 +21,13 @@ const MessageSchema = new Schema(
     meta: { type: Schema.Types.Mixed, default: {} },
 
     sentAt: { type: Date, required: true, index: true },
+
   },
   { timestamps: true }
 );
+MessageSchema.index({ contactId: 1, createdAt: 1 });
+MessageSchema.index({ businessId: 1, createdAt: -1 });
+MessageSchema.index({ waMessageId: 1 }, { unique: true, sparse: true });
 
 export type Message = InferSchemaType<typeof MessageSchema> & { _id: Types.ObjectId };
 export const MessageModel = mongoose.model("Message", MessageSchema);

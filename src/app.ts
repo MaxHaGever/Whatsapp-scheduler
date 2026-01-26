@@ -1,6 +1,7 @@
 import express from "express";
 import whatsappRoutes from "./routes/whatsappRoutes";
 import googleRoutes from "./routes/googleRoutes";
+import debugeRoutes from "./routes/debugRoutes";
 
 export function createApp() {
   const app = express();
@@ -10,6 +11,7 @@ export function createApp() {
 
   app.use("/webhook/whatsapp", whatsappRoutes);
   app.use(googleRoutes);
+  app.use("/debug", debugeRoutes);
 
   return app;
 }
