@@ -1,5 +1,5 @@
 import { Request, Response } from "express";
-
+import { ensureDefaultCalendarConnection } from "../calendar/ensureDefaultCalendarConnection";
 import { sendTextMessage } from "../services/whatsapp";
 import {
   getOrCreateUserState,
@@ -23,6 +23,7 @@ export async function handleWebhookPost(req: Request, res: Response) {
 
   try {
     const businessId = await getDefaultBusinessId();
+    await ensureDefaultCalendarConnection(businessId);
 
     const body = req.body;
     const change = body?.entry?.[0]?.changes?.[0];
