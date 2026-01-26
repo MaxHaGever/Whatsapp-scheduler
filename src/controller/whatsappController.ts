@@ -1,6 +1,5 @@
 import { Request, Response } from "express";
-import { ensureDefaultCalendarConnection } from "../calendar/ensureDefaultCalendarConnection";
-import { sendTextMessage } from "../services/whatsapp";
+
 import {
   getOrCreateUserState,
   saveUserState,
@@ -18,17 +17,21 @@ import {
 import { welcomeMessage } from "../messages/welcome.messages";
 import { detectLanguageByKeyword, isResetRequest } from "../nlp/commands";
 
+import { runWelcomeFlow } from "../flows/welcomeFlow";
+import { runIdleFlow } from "../flows/idleFlow";
+
 export async function handleWebhookPost(req: Request, res: Response) {
+  // ✅ ACK immediately (Meta requires quick response)
   res.sendStatus(200);
 
   try {
     const businessId = await getDefaultBusinessId();
-    await ensureDefaultCalendarConnection(businessId);
 
     const body = req.body;
     const change = body?.entry?.[0]?.changes?.[0];
     const value = change?.value;
 
+    // ✅ Status updates (delivered/read/etc)
     if (value?.statuses?.length) {
       const s = value.statuses[0];
       console.log(`[WA STATUS] id=${s?.id} status=${s?.status}`);
@@ -39,6 +42,7 @@ export async function handleWebhookPost(req: Request, res: Response) {
       return;
     }
 
+    // ✅ Only handle inbound messages
     const message = value?.messages?.[0];
     if (!message) return;
 
@@ -46,6 +50,7 @@ export async function handleWebhookPost(req: Request, res: Response) {
     const type: string | undefined = message.type;
     if (!waId) return;
 
+    // ✅ Non-text message -> respond with a fixed message (stored)
     if (type !== "text") {
       console.log(`[INBOUND] from=${waId} type=${type} ignored`);
 
@@ -59,12 +64,13 @@ export async function handleWebhookPost(req: Request, res: Response) {
       return;
     }
 
+    // ✅ Extract text
     const textRaw: string | undefined = message?.text?.body;
     if (!textRaw) return;
 
     console.log(`[INBOUND] from=${waId} text="${textRaw}"`);
 
-    // ✅ Always store inbound message
+    // ✅ Always store inbound text message
     await saveInboundMessage({
       businessId,
       waId,
@@ -73,17 +79,17 @@ export async function handleWebhookPost(req: Request, res: Response) {
       meta: { source: "webhook" },
     });
 
-    // Load state
+    // ✅ Load user state
     let state = await getOrCreateUserState(waId);
 
-    // Expire session → reset
+    // ✅ Session expired -> reset conversation stage back to welcome
     if (isExpired(state)) {
       await resetConversationState(waId);
       state = await getOrCreateUserState(waId);
       await saveUserState(waId, { stage: "WELCOME" });
     }
 
-    // Manual reset
+    // ✅ Manual reset command
     if (isResetRequest(textRaw)) {
       await resetConversationState(waId);
       state = await getOrCreateUserState(waId);
@@ -99,7 +105,7 @@ export async function handleWebhookPost(req: Request, res: Response) {
       return;
     }
 
-    // Language selection
+    // ✅ Language selection command
     const langPick = detectLanguageByKeyword(textRaw);
     if (langPick) {
       await saveUserState(waId, { preferredLanguage: langPick });
@@ -115,25 +121,18 @@ export async function handleWebhookPost(req: Request, res: Response) {
       return;
     }
 
-    // WELCOME stage
+    // ✅ Route by state
     if (state.stage === "WELCOME") {
-      await sendAndStoreTextMessage({
+      await runWelcomeFlow({
         businessId,
         waId,
-        body: welcomeMessage(state.preferredLanguage),
-        meta: { stage: "WELCOME" },
+        lang: state.preferredLanguage,
       });
-
-      await saveUserState(waId, { stage: "IDLE" });
       return;
     }
 
-    // ✅ For now: everything else → simple placeholder reply (not stored yet)
-    await sendTextMessage(
-      waId,
-      "✅ תודה! בשלב הזה אני יודע רק לברך 🙂\nבקרוב נוסיף קביעת תורים.\nאם רוצים להתחיל מחדש כתבו: reset"
-    );
-
+    // ✅ For now: everything else -> placeholder reply (NOT stored)
+    await runIdleFlow({ waId });
     return;
   } catch (err) {
     console.error("[WEBHOOK_ERROR]", err);
