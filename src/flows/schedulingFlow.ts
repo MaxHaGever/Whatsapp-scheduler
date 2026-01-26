@@ -1,188 +1,82 @@
-import { extractDateIntent } from "../ai/extractDateIntent";
+import { getOrCreateUserState, saveUserState } from "../services/state";
 import { sendAndStoreTextMessage } from "../services/messageService";
-import { getOrCreateUserState, saveUserState, type Lang } from "../services/state";
-import { proposeSlotsForBusiness, bookSlotForBusiness } from "../services/scheduling";
+import { calendarNotConnectedMessage } from "../messages/calendar.messages";
+import { proposeSlotsForBusiness } from "../services/scheduling";
 
-import { askDateMessage } from "../messages/askDate.messages";
-import { slotsMessage } from "../messages/slots.messages";
-import { bookedMessage } from "../messages/booked.messages";
-import { noSlotsMessage } from "../messages/noSlots.messages";
+function isCalendarNotConnectedError(err: any): boolean {
+  const msg = String(err?.message ?? "");
+  return (
+    msg.includes("No active calendar connection") ||
+    msg.includes("Google refresh token missing") ||
+    msg.includes("not connected")
+  );
+}
 
-import { looksLikeSchedulingRequest, parseChoiceNumber } from "../nlp/dateHints";
-
-const TZ = process.env.DEFAULT_TZ || "Asia/Jerusalem";
-
+/**
+ * Step 1 Scheduling Flow
+ * - If calendar is not connected => send message and return safely
+ * - If connected => propose slots (simple example for today)
+ */
 export async function runSchedulingFlow(args: {
   businessId: string;
   waId: string;
-  textRaw: string;
-}): Promise<boolean> {
-  const state = await getOrCreateUserState(args.waId);
-  const lang: Lang = state.preferredLanguage;
+  text: string;
+}) {
+  const { businessId, waId } = args;
 
-  // ✅ IDLE: decide if this looks like scheduling
-  if (state.stage === "IDLE") {
-    if (!looksLikeSchedulingRequest(args.textRaw)) {
-      return false; // not handled here -> controller can fallback placeholder
-    }
+  const state = await getOrCreateUserState(waId);
+  const lang = state.preferredLanguage;
 
-    // start scheduling using the same message
-    await saveUserState(args.waId, { stage: "AWAIT_DATE" });
-    return await runSchedulingFlow({ ...args }); // re-run inside AWAIT_DATE
-  }
+  try {
+    const timezone = process.env.DEFAULT_TZ || "Asia/Jerusalem";
+    const todayIso = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
 
-  // ✅ AWAIT_DATE: AI ACTIVE
-  if (state.stage === "AWAIT_DATE") {
-    const intent = await extractDateIntent(args.textRaw);
-
-    // update lang if AI detected confidently
-    if (intent.language === "he" || intent.language === "ru" || intent.language === "en") {
-      await saveUserState(args.waId, { preferredLanguage: intent.language });
-    }
-
-    const useLang: Lang =
-      intent.language === "he" || intent.language === "ru" || intent.language === "en"
-        ? intent.language
-        : lang;
-
-    // no date -> ask again (AI stays active here)
-    if (!intent.date || intent.needs_clarification) {
-      await sendAndStoreTextMessage({
-        businessId: args.businessId,
-        waId: args.waId,
-        body: askDateMessage(useLang),
-        meta: { flow: "scheduling", stage: "AWAIT_DATE", reason: "needs_clarification" },
-      });
-
-      await saveUserState(args.waId, { stage: "AWAIT_DATE" });
-      return true;
-    }
-
-    // propose slots
     const slots = await proposeSlotsForBusiness({
-      businessId: args.businessId,
-      dayIsoDate: intent.date,
-      timezone: TZ,
+      businessId,
+      dayIsoDate: todayIso,
+      timezone,
       maxSlots: 3,
     });
 
-    if (!slots.length) {
-      await sendAndStoreTextMessage({
-        businessId: args.businessId,
-        waId: args.waId,
-        body: noSlotsMessage(useLang),
-        meta: { flow: "scheduling", stage: "AWAIT_DATE", date: intent.date },
-      });
-
-      await saveUserState(args.waId, { stage: "AWAIT_DATE" });
-      return true;
-    }
+    const msg =
+      slots.length > 0
+        ? `מצאתי תורים פנויים:\n${slots
+            .map((s, i) => `${i + 1}) ${s.label}`)
+            .join("\n")}\n\nהשיבו עם 1/2/3 כדי לבחור`
+        : "לא מצאתי תורים פנויים היום. נסו תאריך אחר 🙂";
 
     await sendAndStoreTextMessage({
-      businessId: args.businessId,
-      waId: args.waId,
-      body: slotsMessage(useLang, slots),
-      meta: { flow: "scheduling", stage: "OFFERING_SLOTS", date: intent.date },
+      businessId,
+      waId,
+      body: msg,
+      meta: { reason: "slots-proposed-step1" },
     });
 
-    await saveUserState(args.waId, {
-      stage: "OFFERING_SLOTS",
-      pendingDayIso: intent.date,
-      pendingSlots: slots,
-      pendingTimePreference: intent.time_preference ?? null,
-      preferredLanguage: useLang,
-    });
-
-    return true;
-  }
-
-  // ✅ OFFERING_SLOTS: flexible (number OR new request)
-  if (state.stage === "OFFERING_SLOTS") {
-    const choice = parseChoiceNumber(args.textRaw);
-    const slots = state.pendingSlots ?? [];
-
-    // 1) If user typed 1/2/3 -> book
-    if (choice !== null && choice >= 1 && choice <= slots.length) {
-      const picked = slots[choice - 1];
-
-      await bookSlotForBusiness({
-        businessId: args.businessId,
-        waId: args.waId,
-        startIso: picked.startIso,
-        endIso: picked.endIso,
-        summary: "Clinic Appointment",
-      });
-
+    await saveUserState(waId, { stage: "IDLE" });
+    return;
+  } catch (err: any) {
+    // ✅ calendar not connected => friendly reply
+    if (isCalendarNotConnectedError(err)) {
       await sendAndStoreTextMessage({
-        businessId: args.businessId,
-        waId: args.waId,
-        body: bookedMessage(lang, picked.label),
-        meta: { flow: "scheduling", stage: "BOOKED", picked: picked.label },
+        businessId,
+        waId,
+        body: calendarNotConnectedMessage(lang),
+        meta: { reason: "calendar-not-connected" },
       });
 
-      // return to idle
-      await saveUserState(args.waId, {
-        stage: "IDLE",
-        pendingDayIso: undefined,
-        pendingSlots: undefined,
-        pendingTimePreference: null,
-      });
-
-      return true;
+      await saveUserState(waId, { stage: "IDLE" });
+      return;
     }
 
-    // 2) Otherwise -> treat message as a NEW scheduling request
-    // AI ACTIVE here because user might say "later", "Thursday", "evening"
-    const intent = await extractDateIntent(args.textRaw);
-
-    // language update
-    if (intent.language === "he" || intent.language === "ru" || intent.language === "en") {
-      await saveUserState(args.waId, { preferredLanguage: intent.language });
-    }
-
-    const useLang: Lang =
-      intent.language === "he" || intent.language === "ru" || intent.language === "en"
-        ? intent.language
-        : lang;
-
-    // If AI didn't get a date but we have pendingDayIso, and user maybe said "evening/later"
-    const day = intent.date ?? state.pendingDayIso ?? null;
-
-    if (!day) {
-      await sendAndStoreTextMessage({
-        businessId: args.businessId,
-        waId: args.waId,
-        body: askDateMessage(useLang),
-        meta: { flow: "scheduling", stage: "OFFERING_SLOTS", reason: "no-date" },
-      });
-      await saveUserState(args.waId, { stage: "AWAIT_DATE" });
-      return true;
-    }
-
-    const newSlots = await proposeSlotsForBusiness({
-      businessId: args.businessId,
-      dayIsoDate: day,
-      timezone: TZ,
-      maxSlots: 3,
-    });
+    console.error("[SCHEDULING_FLOW_ERROR]", err);
 
     await sendAndStoreTextMessage({
-      businessId: args.businessId,
-      waId: args.waId,
-      body: slotsMessage(useLang, newSlots),
-      meta: { flow: "scheduling", stage: "OFFERING_SLOTS", date: day, reason: "refine-or-new-date" },
+      businessId,
+      waId,
+      body: "⚠️ הייתה בעיה זמנית מול היומן. נסו שוב בעוד דקה.",
+      meta: { reason: "calendar-provider-error" },
     });
 
-    await saveUserState(args.waId, {
-      stage: "OFFERING_SLOTS",
-      pendingDayIso: day,
-      pendingSlots: newSlots,
-      pendingTimePreference: intent.time_preference ?? null,
-      preferredLanguage: useLang,
-    });
-
-    return true;
+    await saveUserState(waId, { stage: "IDLE" });
   }
-
-  return false;
 }

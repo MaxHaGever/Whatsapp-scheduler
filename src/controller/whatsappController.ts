@@ -1,5 +1,4 @@
-import type { Request, Response } from "express";
-
+import { Request, Response } from "express";
 import { runSchedulingFlow } from "../flows/schedulingFlow";
 
 import {
@@ -18,9 +17,10 @@ import {
 
 import { welcomeMessage } from "../messages/welcome.messages";
 import { detectLanguageByKeyword, isResetRequest } from "../nlp/commands";
+import { runWelcomeFlow } from "../flows/welcomeFlow";
 
 export async function handleWebhookPost(req: Request, res: Response) {
-  // ✅ ACK immediately (Meta requires fast response)
+  // ✅ ACK immediately (Meta requires quick response)
   res.sendStatus(200);
 
   try {
@@ -49,7 +49,7 @@ export async function handleWebhookPost(req: Request, res: Response) {
     const type: string | undefined = message.type;
     if (!waId) return;
 
-    // ✅ Non-text message -> respond (stored)
+    // ✅ Non-text message -> respond with fixed message (stored)
     if (type !== "text") {
       console.log(`[INBOUND] from=${waId} type=${type} ignored`);
 
@@ -69,7 +69,7 @@ export async function handleWebhookPost(req: Request, res: Response) {
 
     console.log(`[INBOUND] from=${waId} text="${textRaw}"`);
 
-    // ✅ Always store inbound message
+    // ✅ Always store inbound text message
     await saveInboundMessage({
       businessId,
       waId,
@@ -78,13 +78,14 @@ export async function handleWebhookPost(req: Request, res: Response) {
       meta: { source: "webhook" },
     });
 
-    // ✅ Load state
+    // ✅ Load user state
     let state = await getOrCreateUserState(waId);
 
-    // ✅ Expired session -> reset state
+    // ✅ Session expired -> reset conversation stage back to welcome
     if (isExpired(state)) {
       await resetConversationState(waId);
       state = await getOrCreateUserState(waId);
+      await saveUserState(waId, { stage: "WELCOME" });
     }
 
     // ✅ Manual reset command
@@ -112,47 +113,40 @@ export async function handleWebhookPost(req: Request, res: Response) {
         businessId,
         waId,
         body: welcomeMessage(langPick),
-        meta: { stage: "WELCOME", reason: "language-pick", lang: langPick },
+        meta: { stage: "WELCOME", lang: langPick },
       });
 
       await saveUserState(waId, { stage: "IDLE" });
       return;
     }
 
-    // ✅ WELCOME stage (first contact)
+    // ✅ Route by state
     if (state.stage === "WELCOME") {
-      await sendAndStoreTextMessage({
+      await runWelcomeFlow({
         businessId,
         waId,
-        body: welcomeMessage(state.preferredLanguage),
-        meta: { stage: "WELCOME", reason: "first-contact" },
+        lang: state.preferredLanguage,
       });
-
-      await saveUserState(waId, { stage: "IDLE" });
       return;
     }
 
-    // ✅ Scheduling flow handles: IDLE / AWAIT_DATE / OFFERING_SLOTS
-    const handled = await runSchedulingFlow({
+    // ✅ Step 1: If user is IDLE → run scheduling flow (for testing connection errors)
+    if (state.stage === "IDLE") {
+      await runSchedulingFlow({
+        businessId,
+        waId,
+        text: textRaw,
+      });
+      return;
+    }
+
+    // ✅ fallback
+    await sendAndStoreTextMessage({
       businessId,
       waId,
-      textRaw,
+      body: "✅ קיבלתי 🙂",
+      meta: { reason: "fallback" },
     });
-
-    // ✅ If not handled -> simple fallback (stored? NOT for now)
-    if (!handled) {
-      await sendAndStoreTextMessage({
-        businessId,
-        waId,
-        body: '✅ קיבלתי!\nכרגע אני יודע לעזור רק עם קביעת תורים.\nנסו לכתוב למשל: "מחר בבוקר"',
-        meta: { stage: state.stage, reason: "not-handled" },
-      });
-
-      // keep IDLE so user can start scheduling later
-      await saveUserState(waId, { stage: "IDLE" });
-    }
-
-    return;
   } catch (err) {
     console.error("[WEBHOOK_ERROR]", err);
   }
