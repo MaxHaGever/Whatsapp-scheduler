@@ -9,7 +9,7 @@ import {
 } from "../messages/scheduling.messages";
 
 import { extractDateIntent } from "../ai/date/intentExtractor";
-import { proposeSlotsForBusiness } from "../services/scheduling";
+import { proposeSlotsForBusiness, bookSlotForBusiness } from "../services/scheduling";
 import { getCalendarProviderForBusiness } from "../calendar/calendarService";
 
 function isCalendarNotConnectedError(err: any): boolean {
@@ -36,6 +36,8 @@ export async function runSchedulingFlow(args: {
 
   const state = await getOrCreateUserState(waId);
   const lang = state.preferredLanguage;
+
+  // In the future this should come from Business.timezone
   const timezone = process.env.DEFAULT_TZ || "Asia/Jerusalem";
 
   // ✅ Ensure calendar is connected
@@ -59,7 +61,7 @@ export async function runSchedulingFlow(args: {
 
   // ✅ AWAIT_SLOT_CHOICE:
   // accept:
-  // 1/2/3 -> book placeholder
+  // 1/2/3 -> real booking
   // or any other text -> treat as new date request (go back to AI)
   if (state.stage === "AWAIT_SLOT_CHOICE") {
     const slots = state.pendingSlots || [];
@@ -79,12 +81,27 @@ export async function runSchedulingFlow(args: {
 
       const chosen = slots[n - 1];
 
-      // ✅ for now: pretend booked
+      // ✅ REAL BOOKING (Google Calendar / other provider)
+      const booked = await bookSlotForBusiness({
+        businessId,
+        waId,
+        startIso: chosen.startIso,
+        endIso: chosen.endIso,
+        timezone,
+        summary: "Clinic Appointment",
+      });
+
       await sendAndStoreTextMessage({
         businessId,
         waId,
         body: bookedMessage(lang, chosen.label),
-        meta: { reason: "booked-placeholder" },
+        meta: {
+          reason: "booked",
+          eventId: booked.eventId,
+          startIso: chosen.startIso,
+          endIso: chosen.endIso,
+          label: chosen.label,
+        },
       });
 
       await saveUserState(waId, {
