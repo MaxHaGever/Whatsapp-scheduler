@@ -1,5 +1,5 @@
 import express from "express";
-import cors from "cors";
+import cors, { CorsOptionsDelegate } from "cors";
 
 import whatsappRoutes from "./routes/whatsappRoutes";
 import googleRoutes from "./routes/googleRoutes";
@@ -7,35 +7,33 @@ import debugeRoutes from "./routes/debugRoutes";
 import authRoutes from "./routes/authRoutes";
 import businessRoutes from "./routes/businessRoutes";
 import calendarRoutes from "./routes/calendarRoutes";
-import whatsappSettingsRoutes from "./routes/whatsappSettingsRoutes";
-
 import { handleGoogleOAuthCallbackMultiTenant } from "./controller/calendarController";
+import whatsappSettingsRoutes from "./routes/whatsappSettingsRoutes";
 
 export function createApp() {
   const app = express();
 
-  // ---- CORS (allow dashboard + local dev) ----
+  // ---- CORS (Dashboard + local dev) ----
   const allowedOrigins = [
     "https://seashell-app-46fux.ondigitalocean.app",
     "http://localhost:4200",
   ];
 
-  app.use(
-    cors({
-      origin: (origin, callback) => {
-        // Allow server-to-server calls (webhooks, curl, postman) that have no Origin header
-        if (!origin) return callback(null, true);
+  const corsOptionsDelegate: CorsOptionsDelegate = (req, callback) => {
+    const originHeader = req.headers["origin"];
+    const origin = Array.isArray(originHeader) ? originHeader[0] : originHeader;
 
-        if (allowedOrigins.includes(origin)) return callback(null, true);
+    // Allow non-browser tools / server-to-server calls (WhatsApp webhooks, curl, Postman)
+    if (!origin) {
+      return callback(null, { origin: true, credentials: true });
+    }
 
-        return callback(new Error(`CORS blocked for origin: ${origin}`));
-      },
-      credentials: true,
-    })
-  );
+    const isAllowed = allowedOrigins.includes(origin as string);
+    return callback(null, { origin: isAllowed, credentials: true });
+  };
 
-  // Helpful for preflight requests
-  app.options("*", cors());
+  app.use(cors(corsOptionsDelegate));
+  app.options("*", cors(corsOptionsDelegate));
 
   app.use(express.json());
 
