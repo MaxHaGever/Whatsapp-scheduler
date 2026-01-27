@@ -20,25 +20,41 @@ async function getOrCreateContact ({businessId, waId}: EnsureContext) {
     return contact;
 }
 
-/**
- * Temporary helper for NOW (single business mode).
- * Later: you will resolve business by phone_number_id from webhook metadata.
- */
 export async function getDefaultBusinessId(): Promise<string> {
   const name = process.env.DEFAULT_BUSINESS_NAME || "Default Business";
   const timezone = process.env.DEFAULT_TZ || "Asia/Jerusalem";
 
-  const existing = await BusinessModel.findOne({ name });
-  if (existing) return String(existing._id);
+  // This should be your TEST phone_number_id from Meta
+  const phoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID;
+
+  // If you don't have it, fallback by name (dev convenience)
+  if (!phoneNumberId) {
+    const existingByName = await BusinessModel.findOne({ name });
+    if (existingByName) return String(existingByName._id);
+
+    const created = await BusinessModel.create({
+      name,
+      timezone,
+      phoneNumberId: null,
+      wabaId: null,
+    });
+    return String(created._id);
+  }
+
+  // Prefer matching by phoneNumberId (this matches webhook routing)
+  const existingByPhone = await BusinessModel.findOne({ phoneNumberId });
+  if (existingByPhone) return String(existingByPhone._id);
 
   const created = await BusinessModel.create({
     name,
     timezone,
-    whatsappBusinessId: process.env.WHATSAPP_PHONE_NUMBER_ID ?? null,
+    phoneNumberId,
+    wabaId: null, // optional: fill later if you add it to env
   });
 
   return String(created._id);
 }
+
 
 export async function saveInboundMessage(args: {
   businessId: string;

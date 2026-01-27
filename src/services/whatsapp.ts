@@ -12,11 +12,11 @@ export type WhatsAppSendResult = {
 };
 
 export async function sendTextMessage(to: string, body: string): Promise<WhatsAppSendResult> {
-  const token = process.env.WHATSAPP_TOKEN;
+  const token = process.env.WHATSAPP_ACCESS_TOKEN;
   const phoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID;
 
   if (!token || !phoneNumberId) {
-    throw new Error("Missing WHATSAPP_TOKEN or WHATSAPP_PHONE_NUMBER_ID in env.");
+    throw new Error("Missing WHATSAPP_ACCESS_TOKEN or WHATSAPP_PHONE_NUMBER_ID in env.");
   }
 
   // Build marker (so we can prove which deployment is responding)
