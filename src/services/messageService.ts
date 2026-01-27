@@ -66,17 +66,30 @@ export async function saveInboundMessage(args: {
 }) {
   const contact = await getOrCreateContact({ businessId: args.businessId, waId: args.waId });
 
+  const waMessageId = args.waMessageId ?? null;
+
+  // ✅ DEDUPE: if Meta retries webhook, skip if already stored
+  if (waMessageId) {
+    const existing = await MessageModel.findOne({
+      businessId: args.businessId,
+      waMessageId,
+    }).lean();
+
+    if (existing) return existing;
+  }
+
   return MessageModel.create({
     businessId: args.businessId,
     contactId: contact._id,
     direction: "in" as MessageDirection,
     body: args.body,
-    waMessageId: args.waMessageId ?? null,
+    waMessageId,
     status: "unknown" as MessageStatus,
     meta: args.meta ?? {},
     sentAt: args.sentAt ?? new Date(),
   });
 }
+
 
 export async function sendAndStoreTextMessage(args: {
   businessId: string;

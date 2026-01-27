@@ -30,4 +30,5 @@ MessageSchema.index({ businessId: 1, waMessageId: 1 }, { unique: true, sparse: t
 MessageSchema.index({ waMessageId: 1 }, { unique: true, sparse: true });
 
 export type Message = InferSchemaType<typeof MessageSchema> & { _id: Types.ObjectId };
-export const MessageModel = mongoose.model("Message", MessageSchema);
+export const MessageModel =
+  mongoose.models.Message || mongoose.model("Message", MessageSchema);
