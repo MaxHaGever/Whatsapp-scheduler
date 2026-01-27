@@ -6,6 +6,8 @@ import authRoutes from "./routes/authRoutes";
 import businessRoutes from "./routes/businessRoutes";
 import calendarRoutes from "./routes/calendarRoutes";
 import { handleGoogleOAuthCallbackMultiTenant } from "./controller/calendarController";
+import whatsappSettingsRoutes from "./routes/whatsappSettingsRoutes";
+
 
 
 
@@ -16,6 +18,7 @@ export function createApp() {
   app.get("/health", (_req, res) => res.send("ok"));
 
   app.use("/api", authRoutes);
+  app.use("/api/whatsapp", whatsappSettingsRoutes);
   app.use("/api/business", businessRoutes);
     
   app.use("/api/calendar", calendarRoutes);
