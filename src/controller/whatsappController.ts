@@ -69,9 +69,21 @@ export async function handleWebhookPost(req: Request, res: Response) {
 
         // ✅ Resolve Business from phone_number_id (fallback to default for dev/testing)
         const businessDoc = await BusinessModel.findOne({ phoneNumberId }).lean();
-        const businessId: string = businessDoc
-          ? String((businessDoc as any)._id)
-          : await getDefaultBusinessId();
+
+        let businessId: string;
+
+        if (businessDoc) {
+          businessId = String((businessDoc as any)._id);
+        } else {
+        // ✅ Production safety: don't route unknown numbers to default
+        if (process.env.NODE_ENV === "production") {
+        console.warn(`[WEBHOOK] Unknown phoneNumberId=${phoneNumberId} - ignoring`);
+       continue; // continues the "for (const change ...)" loop
+  }
+
+        // ✅ Dev fallback
+          businessId = await getDefaultBusinessId();
+        }
 
         // ✅ Status updates (delivered/read/etc)
         if (value?.statuses?.length) {
