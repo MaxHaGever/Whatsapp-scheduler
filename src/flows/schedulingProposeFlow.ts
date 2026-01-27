@@ -1,7 +1,7 @@
 import { getOrCreateUserState, saveUserState } from "../services/state";
 import { sendAndStoreTextMessage } from "../services/messageService";
 import { askForDateMessage, slotsMessage } from "../messages/scheduling.messages";
-import { extractDateIntent } from "../ai/date/extractDateIntent";
+import { extractDateIntent } from "../ai/date/intentExtractor";
 import { proposeSlotsForBusiness } from "../services/scheduling";
 import { getCalendarProviderForBusiness } from "../calendar/calendarService";
 

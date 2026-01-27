@@ -1,6 +1,6 @@
 import { getOrCreateUserState, saveUserState } from "../services/state";
 import { sendAndStoreTextMessage } from "../services/messageService";
-import { extractTopLevelIntent } from "../ai/intent/extractTopLevelIntent";
+import { extractTopIntent } from "../ai/intent/extractTopIntent";
 
 export async function runIntentDetectionFlow(args: {
   businessId: string;
@@ -12,7 +12,7 @@ export async function runIntentDetectionFlow(args: {
   const state = await getOrCreateUserState(businessId, waId);
   const lang = state.preferredLanguage;
 
-  const intent = await extractTopLevelIntent(text);
+  const intent = await extractTopIntent(text);
 
   if (intent.intent === "schedule") {
     await saveUserState(businessId, waId, { stage: "SCHEDULING_AWAIT_DATE" });

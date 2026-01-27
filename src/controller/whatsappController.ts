@@ -19,11 +19,17 @@ import { detectLanguageByKeyword, isResetRequest } from "../nlp/commands";
 
 import { runWelcomeFlow } from "../flows/welcomeFlow";
 import { runIntentDetectionFlow } from "../flows/intentDetectionFlow";
-import { runSchedulingDateFlow } from "../flows/schedulingDateFlow";
+
+// scheduling split flows (your repo already has these names from grep)
+import { runSchedulingProposeFlow } from "../flows/schedulingProposeFlow";
 import { runSchedulingChoiceFlow } from "../flows/schedulingChoiceFlow";
 
+// cancel/reschedule flows (must exist)
+import { runCancelFlow } from "../flows/cancelFlow";
+import { runRescheduleFlow } from "../flows/rescheduleFlow";
+
 export async function handleWebhookPost(req: Request, res: Response) {
-  // ACK immediately
+  // Meta requires quick response
   res.sendStatus(200);
 
   try {
@@ -37,6 +43,7 @@ export async function handleWebhookPost(req: Request, res: Response) {
         const phoneNumberId: string | undefined = value?.metadata?.phone_number_id;
         if (!phoneNumberId) continue;
 
+        // resolve businessId
         const businessDoc = await BusinessModel.findOne({ phoneNumberId }).lean();
         let businessId: string;
 
@@ -50,7 +57,7 @@ export async function handleWebhookPost(req: Request, res: Response) {
           businessId = await getDefaultBusinessId();
         }
 
-        // Status updates
+        // statuses
         if (value?.statuses?.length) {
           const s = value.statuses[0];
           console.log(`[WA STATUS] phoneNumberId=${phoneNumberId} id=${s?.id} status=${s?.status}`);
@@ -60,6 +67,7 @@ export async function handleWebhookPost(req: Request, res: Response) {
           continue;
         }
 
+        // inbound messages
         const messages = value?.messages ?? [];
         for (const message of messages) {
           if (!message) continue;
@@ -92,12 +100,15 @@ export async function handleWebhookPost(req: Request, res: Response) {
           });
 
           let state = await getOrCreateUserState(businessId, waId);
+          console.log(`[STATE] stage=${state.stage} lang=${state.preferredLanguage}`);
 
+          // expired session
           if (isExpired(state)) {
             await resetConversationState(businessId, waId);
             state = await getOrCreateUserState(businessId, waId);
           }
 
+          // manual reset
           if (isResetRequest(textRaw)) {
             await resetConversationState(businessId, waId);
             state = await getOrCreateUserState(businessId, waId);
@@ -113,6 +124,7 @@ export async function handleWebhookPost(req: Request, res: Response) {
             continue;
           }
 
+          // language selection keywords
           const langPick = detectLanguageByKeyword(textRaw);
           if (langPick) {
             await saveUserState(businessId, waId, { preferredLanguage: langPick });
@@ -128,7 +140,7 @@ export async function handleWebhookPost(req: Request, res: Response) {
             continue;
           }
 
-          // WELCOME stage: send welcome and move to AWAIT_INTENT
+          // first welcome
           if (state.stage === "WELCOME") {
             await runWelcomeFlow({
               businessId,
@@ -141,27 +153,40 @@ export async function handleWebhookPost(req: Request, res: Response) {
             continue;
           }
 
-          // Intent stage
-          if (state.stage === "AWAIT_INTENT") {
+          // intent detection
+          if (state.stage === "AWAIT_INTENT" || state.stage === "IDLE") {
             await runIntentDetectionFlow({ businessId, waId, text: textRaw });
-            // After this call, state will be updated to scheduling/cancel/reschedule/idle
             continue;
           }
 
-          // Scheduling: date stage
+          // scheduling
           if (state.stage === "SCHEDULING_AWAIT_DATE") {
-            await runSchedulingDateFlow({ businessId, waId, text: textRaw });
+            await runSchedulingProposeFlow({ businessId, waId, text: textRaw });
             continue;
           }
 
-          // Scheduling: slot choice stage (numbers / more / new date)
           if (state.stage === "SCHEDULING_AWAIT_SLOT") {
             await runSchedulingChoiceFlow({ businessId, waId, text: textRaw });
             continue;
           }
 
-          // TODO: CANCEL flows and RESCHEDULE flows will go here (you already had cancel working)
-          // For now, fallback to intent detection if user types something unexpected:
+          // cancel
+          if (state.stage === "CANCEL_AWAIT_TARGET") {
+            await runCancelFlow({ businessId, waId, text: textRaw });
+            continue;
+          }
+
+          // reschedule (your flow should internally handle which substage)
+          if (
+            state.stage === "RESCHEDULE_AWAIT_TARGET" ||
+            state.stage === "RESCHEDULE_AWAIT_NEW_DATE"
+          ) {
+            await runRescheduleFlow({ businessId, waId, text: textRaw });
+            continue;
+          }
+
+          // safety fallback
+          await saveUserState(businessId, waId, { stage: "AWAIT_INTENT" });
           await runIntentDetectionFlow({ businessId, waId, text: textRaw });
         }
       }
