@@ -27,6 +27,7 @@ export type UserState = {
   lastActiveAtIso: string;
   pendingDayIso?: string;
   pendingSlots?: PendingSlot[];
+  pendingSlotOffset?: number;
 };
 
 const UserStateSchema = new mongoose.Schema<UserState>(
@@ -38,6 +39,7 @@ const UserStateSchema = new mongoose.Schema<UserState>(
     lastActiveAtIso: { type: String, required: true },
     pendingDayIso: { type: String, required: false },
     pendingSlots: { type: Array, required: false },
+    pendingSlotOffset: { type: Number, required: false },
   },
   { timestamps: true }
 );

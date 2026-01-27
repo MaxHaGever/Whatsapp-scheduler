@@ -11,7 +11,7 @@ import { getOAuth2Client } from "../../services/googleAuth";
 
 /**
  * Google Calendar Provider (implements CalendarProvider)
- * Uses a refresh token (stored per business later).
+ * Uses a refresh token stored per business.
  */
 export function createGoogleProvider(args: {
   refreshToken: string;
@@ -25,18 +25,14 @@ export function createGoogleProvider(args: {
     return client;
   }
 
-  function formatSlotLabel(start: DateTime, timezone: string) {
-    return start.setZone(timezone).toFormat("ccc dd/LL HH:mm");
-  }
-
   return {
     /**
-     * Propose available time slots in a given day.
-     * - working hours: 09:00–17:00
-     * - slot duration: 30 minutes
-     * - if maxSlots is undefined => returns ALL free slots for that day
+     * Propose available time slots for a day
+     * Default working hours: 09:00–17:00
+     * Slot duration: 30 minutes
+     * NOTE: We do NOT format "label" here (language formatting happens in message layer)
      */
-    async proposeSlots({ dayIsoDate, timezone, maxSlots }: ProposeSlotsArgs): Promise<Slot[]> {
+    async proposeSlots({ dayIsoDate, timezone, maxSlots = 9999 }: ProposeSlotsArgs): Promise<Slot[]> {
       const slotMinutes = 30;
 
       const startOfDay = DateTime.fromISO(dayIsoDate, { zone: timezone }).set({
@@ -54,9 +50,7 @@ export function createGoogleProvider(args: {
       });
 
       if (!startOfDay.isValid || !endOfDay.isValid) {
-        throw new Error(
-          `Invalid dayIsoDate or timezone. dayIsoDate=${dayIsoDate}, timezone=${timezone}`
-        );
+        throw new Error(`Invalid dayIsoDate or timezone. dayIsoDate=${dayIsoDate}, timezone=${timezone}`);
       }
 
       const auth = await getClient();
@@ -72,7 +66,6 @@ export function createGoogleProvider(args: {
 
       const items = resp.data.items ?? [];
 
-      // ✅ Build busy intervals (supports dateTime AND all-day date)
       const busyIntervals: Interval[] = items
         .map((ev) => {
           const startRaw = ev.start?.dateTime ?? ev.start?.date;
@@ -91,9 +84,8 @@ export function createGoogleProvider(args: {
       const slots: Slot[] = [];
       let cursor = startOfDay;
 
-      while (cursor.plus({ minutes: slotMinutes }) <= endOfDay) {
+      while (cursor.plus({ minutes: slotMinutes }) <= endOfDay && slots.length < maxSlots) {
         const candidate = Interval.fromDateTimes(cursor, cursor.plus({ minutes: slotMinutes }));
-
         const overlaps = busyIntervals.some((busy) => busy.overlaps(candidate));
 
         if (!overlaps) {
@@ -104,13 +96,8 @@ export function createGoogleProvider(args: {
             slots.push({
               startIso: start.toISO()!,
               endIso: end.toISO()!,
-              label: formatSlotLabel(start, timezone),
+              label: "", // ✅ label is formatted later based on language
             });
-
-            // ✅ cap only if maxSlots was provided
-            if (typeof maxSlots === "number" && maxSlots > 0 && slots.length >= maxSlots) {
-              break;
-            }
           }
         }
 
@@ -171,7 +158,8 @@ export function createGoogleProvider(args: {
           summary: ev.summary ?? "Appointment",
         }));
 
-      void waId; // later we can filter by description containing waId
+      void waId; // later filter by description containing waId
+      void timezone;
 
       return appts;
     },
