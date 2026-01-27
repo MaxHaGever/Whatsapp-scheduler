@@ -12,7 +12,7 @@ export async function proposeSlotsForBusiness(args: {
   const slots = await provider.proposeSlots({
     dayIsoDate: args.dayIsoDate,
     timezone: args.timezone,
-    maxSlots: args.maxSlots ?? 3,
+    maxSlots: args.maxSlots
   });
 
   // Your provider Slot type matches PendingSlot shape (startIso/endIso/label)

@@ -30,24 +30,19 @@ export async function getOrCreateUserState(
 export async function saveUserState(
   businessId: string,
   waId: string,
-  patch: Partial<UserState>
-): Promise<void> {
+  patch: Partial<UserState>,
+  unsetKeys: (keyof UserState)[] = []
+) {
   const nowIso = new Date().toISOString();
 
-  await UserStateModel.updateOne(
-    { businessId, waId },
-    {
-      $set: {
-        ...patch,
-        lastActiveAtIso: nowIso,
-      },
-      $setOnInsert: {
-        businessId,
-        waId,
-      },
-    },
-    { upsert: true }
-  );
+  const $set: any = { ...patch, lastActiveAtIso: nowIso };
+  const $unset: any = {};
+  for (const k of unsetKeys) $unset[k] = 1;
+
+  const update: any = { $set, $setOnInsert: { businessId, waId } };
+  if (Object.keys($unset).length) update.$unset = $unset;
+
+  await UserStateModel.updateOne({ businessId, waId }, update, { upsert: true });
 }
 
 export async function resetConversationState(businessId: string, waId: string): Promise<void> {

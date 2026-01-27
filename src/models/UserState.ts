@@ -8,7 +8,16 @@ export type PendingSlot = {
   label: string;
 };
 
-export type Stage = "WELCOME" | "IDLE" | "AWAIT_DATE" | "AWAIT_SLOT_CHOICE";
+export type Stage =
+  | "WELCOME"
+  | "AWAIT_INTENT"
+  | "SCHEDULING_AWAIT_DATE"
+  | "SCHEDULING_AWAIT_SLOT"
+  | "SCHEDULING_ADJUST_DATE"
+  | "CANCEL_AWAIT_TARGET"
+  | "RESCHEDULE_AWAIT_TARGET"
+  | "RESCHEDULE_AWAIT_NEW_DATE"
+  | "IDLE";
 
 export type UserState = {
   businessId: string;

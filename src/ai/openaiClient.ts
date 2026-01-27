@@ -9,4 +9,5 @@ export function getOpenAIClient() {
 }
 
 export const OPENAI_MODEL = process.env.OPENAI_MODEL || "gpt-4o-mini";
+export const OPENAI_FALLBACK_MODEL = process.env.OPENAI_FALLBACK_MODEL || "gpt-5-mini";
 export const AI_TIMEZONE = process.env.AI_TIMEZONE || "Asia/Jerusalem";

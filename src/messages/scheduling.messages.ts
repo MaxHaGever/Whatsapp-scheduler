@@ -16,14 +16,23 @@ export function slotsMessage(lang: Lang, slots: PendingSlot[]) {
   const lines = slots.map((s, i) => `${i + 1}) ${s.label}`).join("\n");
 
   if (lang === "ru") {
-    return `Нашёл свободные слоты:\n${lines}\n\nОтветьте 1/2/3 כדי выбрать или напишите другую дату.`;
+    return (
+      `Нашёл свободные слоты:\n${lines}\n\n` +
+      `Ответьте номером (например: 1) чтобы выбрать, или напишите другую дату.`
+    );
   }
 
   if (lang === "en") {
-    return `Available slots:\n${lines}\n\nReply 1/2/3 to choose, or write another date.`;
+    return (
+      `Available slots:\n${lines}\n\n` +
+      `Reply with a number (e.g. 1) to choose, or write another date.`
+    );
   }
 
-  return `מצאתי תורים פנויים:\n${lines}\n\nהשיבו עם 1/2/3 כדי לבחור או כתבו תאריך אחר.`;
+  return (
+    `מצאתי תורים פנויים:\n${lines}\n\n` +
+    `השיבו עם מספר (למשל: 1) כדי לבחור, או כתבו תאריך אחר.`
+  );
 }
 
 export function bookedMessage(lang: Lang, label: string) {
@@ -33,7 +42,7 @@ export function bookedMessage(lang: Lang, label: string) {
 }
 
 export function invalidChoiceMessage(lang: Lang) {
-  if (lang === "ru") return "לא הבנתי. השיבו 1/2/3 או כתבו תאריך אחר.";
-  if (lang === "en") return "I didn’t get that. Reply 1/2/3 or write another date.";
-  return "לא הבנתי 🙂 השיבו 1/2/3 או כתבו תאריך אחר.";
+  if (lang === "ru") return "לא הבנתי. השיבו עם מספר (למשל: 1) או כתבו תאריך אחר.";
+  if (lang === "en") return "I didn’t get that. Reply with a number (e.g. 1) or write another date.";
+  return "לא הבנתי 🙂 השיבו עם מספר (למשל: 1) או כתבו תאריך אחר.";
 }

@@ -34,13 +34,9 @@ export function createGoogleProvider(args: {
      * Propose available time slots in a given day.
      * - working hours: 09:00–17:00
      * - slot duration: 30 minutes
-     * - returns first N free slots not overlapping existing events
+     * - if maxSlots is undefined => returns ALL free slots for that day
      */
-    async proposeSlots({
-      dayIsoDate,
-      timezone,
-      maxSlots = 3,
-    }: ProposeSlotsArgs): Promise<Slot[]> {
+    async proposeSlots({ dayIsoDate, timezone, maxSlots }: ProposeSlotsArgs): Promise<Slot[]> {
       const slotMinutes = 30;
 
       const startOfDay = DateTime.fromISO(dayIsoDate, { zone: timezone }).set({
@@ -95,11 +91,8 @@ export function createGoogleProvider(args: {
       const slots: Slot[] = [];
       let cursor = startOfDay;
 
-      while (cursor.plus({ minutes: slotMinutes }) <= endOfDay && slots.length < maxSlots) {
-        const candidate = Interval.fromDateTimes(
-          cursor,
-          cursor.plus({ minutes: slotMinutes })
-        );
+      while (cursor.plus({ minutes: slotMinutes }) <= endOfDay) {
+        const candidate = Interval.fromDateTimes(cursor, cursor.plus({ minutes: slotMinutes }));
 
         const overlaps = busyIntervals.some((busy) => busy.overlaps(candidate));
 
@@ -113,6 +106,11 @@ export function createGoogleProvider(args: {
               endIso: end.toISO()!,
               label: formatSlotLabel(start, timezone),
             });
+
+            // ✅ cap only if maxSlots was provided
+            if (typeof maxSlots === "number" && maxSlots > 0 && slots.length >= maxSlots) {
+              break;
+            }
           }
         }
 
