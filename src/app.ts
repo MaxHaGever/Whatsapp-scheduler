@@ -4,6 +4,9 @@ import googleRoutes from "./routes/googleRoutes";
 import debugeRoutes from "./routes/debugRoutes";
 import authRoutes from "./routes/authRoutes";
 import businessRoutes from "./routes/businessRoutes";
+import calendarRoutes from "./routes/calendarRoutes";
+import { handleGoogleOAuthCallbackMultiTenant } from "./controller/calendarController";
+
 
 
 export function createApp() {
@@ -17,6 +20,8 @@ export function createApp() {
   app.use("/webhook/whatsapp", whatsappRoutes);
   app.use(googleRoutes);
   app.use("/debug", debugeRoutes);
+  app.use("/api/calendar", calendarRoutes);
+  app.get("/api/google/oauth2callback", handleGoogleOAuthCallbackMultiTenant);
 
   return app;
 }
