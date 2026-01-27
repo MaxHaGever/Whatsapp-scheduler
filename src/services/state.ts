@@ -1,5 +1,8 @@
-import { UserState, UserStateModel } from "../models/UserState.js";
-export type { Lang, PendingSlot, Stage, UserState } from "../models/UserState.js";
+import { UserStateModel } from "../models/UserState";
+import type { UserState, Lang, PendingSlot, Stage } from "../models/UserState";
+
+export type { UserState, Lang, PendingSlot, Stage };
+
 
 export async function getOrCreateUserState(
   businessId: string,

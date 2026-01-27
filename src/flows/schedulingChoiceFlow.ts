@@ -2,6 +2,7 @@ import { getOrCreateUserState, saveUserState } from "../services/state";
 import { sendAndStoreTextMessage } from "../services/messageService";
 import { bookedMessage, invalidChoiceMessage } from "../messages/scheduling.messages";
 import { bookSlotForBusiness } from "../services/scheduling";
+import { createAppointmentRecord } from "../services/appointments";
 
 function looksLikeNumberChoice(text: string) {
   return /^[1-9]\d*$/.test(text.trim());
@@ -49,6 +50,16 @@ export async function runSchedulingChoiceFlow(args: {
     timezone,
     summary: "Clinic Appointment",
   });
+
+  await createAppointmentRecord({
+  businessId,
+  waId,
+  provider: "google",
+  providerEventId: booked.eventId,
+  startIso: chosen.startIso,
+  endIso: chosen.endIso,
+  summary: "Clinic Appointment",
+});
 
   await sendAndStoreTextMessage({
     businessId,
