@@ -17,11 +17,20 @@ export function createApp() {
 
   app.use("/api", authRoutes);
   app.use("/api/business", businessRoutes);
-  app.use("/webhook/whatsapp", whatsappRoutes);
-  app.use(googleRoutes);
-  app.use("/debug", debugeRoutes);
+    
   app.use("/api/calendar", calendarRoutes);
-  app.get("/api/google/oauth2callback", handleGoogleOAuthCallbackMultiTenant);
+
+
+  app.get("/oauth2callback", handleGoogleOAuthCallbackMultiTenant);
+
+  app.use("/webhook/whatsapp", whatsappRoutes);
+
+  app.use(googleRoutes);
+
+  app.use("/debug", debugeRoutes);
+
+
+
 
   return app;
 }
