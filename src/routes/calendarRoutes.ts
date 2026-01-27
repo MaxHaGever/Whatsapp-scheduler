@@ -1,9 +1,6 @@
 import express from "express";
 import { protect } from "../middleware/authMiddleware";
-import {
-  getCalendarConnections,
-  getGoogleConnectUrl,
-} from "../controller/calendarController";
+import { getCalendarConnections, getGoogleConnectUrl } from "../controller/calendarController";
 
 const router = express.Router();
 
