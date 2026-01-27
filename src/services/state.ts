@@ -14,6 +14,8 @@ export type Stage =
   | "AWAIT_DATE"
   | "AWAIT_SLOT_CHOICE";
 
+  //Define user state
+
 export type UserState = {
   waId: string;
   preferredLanguage: Lang;
