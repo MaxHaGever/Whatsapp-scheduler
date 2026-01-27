@@ -36,7 +36,7 @@ export async function runIdleFlow(args: {
 
   if (looksLikeScheduling) {
     // ✅ Move user to scheduling mode
-    await saveUserState(waId, { stage: "AWAIT_DATE" });
+    await saveUserState(businessId, waId, { stage: "AWAIT_DATE" });
 
     // ✅ Run scheduling flow (AI will run here)
     await runSchedulingFlow({ businessId, waId, text });

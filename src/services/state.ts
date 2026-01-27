@@ -1,61 +1,22 @@
-import mongoose from "mongoose";
+import { UserState, UserStateModel } from "../models/UserState.js";
+export type { Lang, PendingSlot, Stage, UserState } from "../models/UserState.js";
 
-export type Lang = "he" | "ru" | "en";
-
-export type PendingSlot = {
-  startIso: string;
-  endIso: string;
-  label: string;
-};
-
-export type Stage =
-  | "WELCOME"
-  | "IDLE"
-  | "AWAIT_DATE"
-  | "AWAIT_SLOT_CHOICE";
-
-  //Define user state
-
-export type UserState = {
-  waId: string;
-  preferredLanguage: Lang;
-  stage: Stage;
-  lastActiveAtIso: string;
-
-  pendingDayIso?: string;
-  pendingSlots?: PendingSlot[];
-};
-
-const UserStateSchema = new mongoose.Schema<UserState>(
-  {
-    waId: { type: String, required: true, unique: true },
-    preferredLanguage: { type: String, required: true, default: "he" },
-    stage: { type: String, required: true, default: "WELCOME" },
-
-    lastActiveAtIso: { type: String, required: true },
-
-    pendingDayIso: { type: String, required: false },
-    pendingSlots: { type: Array, required: false },
-  },
-  { timestamps: true }
-);
-
-const UserStateModel =
-  mongoose.models.UserState || mongoose.model<UserState>("UserState", UserStateSchema);
-
-export async function getOrCreateUserState(waId: string): Promise<UserState> {
+export async function getOrCreateUserState(
+  businessId: string,
+  waId: string
+): Promise<UserState> {
   const nowIso = new Date().toISOString();
 
-  const doc = await UserStateModel.findOne({ waId }).lean<UserState>();
+  const doc = await UserStateModel.findOne({ businessId, waId }).lean<UserState>();
   if (doc) {
-    if (!doc.lastActiveAtIso) {
-      await UserStateModel.updateOne({ waId }, { $set: { lastActiveAtIso: nowIso } });
-      doc.lastActiveAtIso = nowIso;
-    }
+    // Update activity on every message so session TTL works reliably
+    await UserStateModel.updateOne({ businessId, waId }, { $set: { lastActiveAtIso: nowIso } });
+    doc.lastActiveAtIso = nowIso;
     return doc;
   }
 
   const created: UserState = {
+    businessId,
     waId,
     preferredLanguage: "he",
     stage: "WELCOME",
@@ -66,23 +27,31 @@ export async function getOrCreateUserState(waId: string): Promise<UserState> {
   return created;
 }
 
-export async function saveUserState(waId: string, patch: Partial<UserState>): Promise<void> {
+export async function saveUserState(
+  businessId: string,
+  waId: string,
+  patch: Partial<UserState>
+): Promise<void> {
   const nowIso = new Date().toISOString();
 
   await UserStateModel.updateOne(
-    { waId },
+    { businessId, waId },
     {
       $set: {
         ...patch,
         lastActiveAtIso: nowIso,
+      },
+      $setOnInsert: {
+        businessId,
+        waId,
       },
     },
     { upsert: true }
   );
 }
 
-export async function resetConversationState(waId: string): Promise<void> {
-  await saveUserState(waId, {
+export async function resetConversationState(businessId: string, waId: string): Promise<void> {
+  await saveUserState(businessId, waId, {
     stage: "WELCOME",
     pendingDayIso: undefined,
     pendingSlots: undefined,

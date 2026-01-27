@@ -88,10 +88,10 @@ export async function sendAndStoreTextMessage(args: {
   return { result, doc };
 }
 
-export async function updateMessageStatusByWaMessageId(waMessageId: string, status: MessageStatus) {
+export async function updateMessageStatusByWaMessageId(businessId: string, waMessageId: string, status: MessageStatus) {
   // update the latest message with that id
   await MessageModel.updateOne(
-    { waMessageId },
+    { waMessageId, businessId },
     { $set: { status } }
   );
 }

@@ -34,7 +34,7 @@ export async function runSchedulingFlow(args: {
 }) {
   const { businessId, waId, text } = args;
 
-  const state = await getOrCreateUserState(waId);
+  const state = await getOrCreateUserState(businessId, waId);
   const lang = state.preferredLanguage;
 
   // In the future this should come from Business.timezone
@@ -52,7 +52,7 @@ export async function runSchedulingFlow(args: {
         meta: { reason: "calendar-not-connected" },
       });
 
-      await saveUserState(waId, { stage: "IDLE" });
+      await saveUserState(businessId,waId, { stage: "IDLE" });
       return;
     }
 
@@ -104,7 +104,7 @@ export async function runSchedulingFlow(args: {
         },
       });
 
-      await saveUserState(waId, {
+      await saveUserState(businessId, waId, {
         stage: "IDLE",
         pendingSlots: undefined,
         pendingDayIso: undefined,
@@ -114,7 +114,7 @@ export async function runSchedulingFlow(args: {
     }
 
     // ✅ Not a number → user wants another date / later / earlier / etc
-    await saveUserState(waId, {
+    await saveUserState(businessId, waId, {
       stage: "AWAIT_DATE",
       pendingSlots: undefined,
       pendingDayIso: undefined,
@@ -122,7 +122,7 @@ export async function runSchedulingFlow(args: {
   }
 
   // ✅ AWAIT_DATE: AI active here
-  await saveUserState(waId, { stage: "AWAIT_DATE" });
+  await saveUserState(businessId, waId, { stage: "AWAIT_DATE" });
 
   const intent = await extractDateIntent(text);
 
@@ -134,7 +134,7 @@ export async function runSchedulingFlow(args: {
       meta: { reason: "awaiting-date" },
     });
 
-    await saveUserState(waId, { stage: "AWAIT_DATE" });
+    await saveUserState(businessId, waId, { stage: "AWAIT_DATE" });
     return;
   }
 
@@ -152,7 +152,7 @@ export async function runSchedulingFlow(args: {
     meta: { reason: "slots-proposed", date: intent.date },
   });
 
-  await saveUserState(waId, {
+  await saveUserState(businessId, waId, {
     stage: "AWAIT_SLOT_CHOICE",
     pendingDayIso: intent.date,
     pendingSlots: slots,
