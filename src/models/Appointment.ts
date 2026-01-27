@@ -2,7 +2,7 @@ import mongoose, { Schema, InferSchemaType } from "mongoose";
 
 const AppointmentSchema = new Schema(
   {
-    businessId: { type: String, required: true, index: true },
+    businessId: { type: Schema.Types.ObjectId, ref: "Business", required: true, index: true }, // ✅ FIX
     waId: { type: String, required: true, index: true },
 
     provider: { type: String, enum: ["google"], required: true, default: "google" },
