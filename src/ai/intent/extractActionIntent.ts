@@ -1,11 +1,11 @@
 import { getOpenAIClient, OPENAI_MODEL } from "../openaiClient";
 
-export type ActionIntentResult = {
+export type IntentResult = {
   intent: "schedule" | "cancel" | "reschedule" | "unknown";
   confidence: number; // 0..1
 };
 
-export async function extractActionIntent(userText: string): Promise<ActionIntentResult> {
+export async function extractActionIntent(userText: string): Promise<IntentResult> {
   const client = getOpenAIClient();
 
   const schema = {
@@ -13,20 +13,21 @@ export async function extractActionIntent(userText: string): Promise<ActionInten
     additionalProperties: false,
     properties: {
       intent: { type: "string", enum: ["schedule", "cancel", "reschedule", "unknown"] },
-      confidence: { type: "number", minimum: 0, maximum: 1 },
+      confidence: { type: "number" },
     },
     required: ["intent", "confidence"],
   } as const;
 
   const system =
-    `You classify the user's intent for an appointment scheduling chatbot.\n` +
-    `User may write Hebrew/Russian/English.\n\n` +
-    `INTENTS:\n` +
-    `- schedule: user wants to book a NEW appointment\n` +
-    `- cancel: user wants to cancel an EXISTING appointment\n` +
-    `- reschedule: user wants to change/move an EXISTING appointment\n` +
-    `- unknown: not clear\n\n` +
-    `Return ONLY JSON matching the schema. No prose.\n`;
+    `You classify a user's intent for an appointment bot.\n` +
+    `Return JSON only.\n\n` +
+    `Intents:\n` +
+    `- schedule: user wants to book/see available times (or mentions a date/time like "tomorrow morning")\n` +
+    `- cancel: user wants to cancel an existing appointment\n` +
+    `- reschedule: user wants to change/move an appointment\n` +
+    `- unknown: not related\n\n` +
+    `IMPORTANT:\n` +
+    `- If the user message contains a date/time/weekday without saying "appointment", classify as schedule.\n`;
 
   const response = await client.responses.create({
     model: OPENAI_MODEL,
@@ -37,7 +38,7 @@ export async function extractActionIntent(userText: string): Promise<ActionInten
     text: {
       format: {
         type: "json_schema",
-        name: "action_intent",
+        name: "intent_result",
         strict: true,
         schema,
       },
@@ -45,7 +46,13 @@ export async function extractActionIntent(userText: string): Promise<ActionInten
   });
 
   const jsonText = response.output_text?.trim();
-  if (!jsonText) throw new Error("OpenAI returned empty output_text");
+  if (!jsonText) return { intent: "unknown", confidence: 0 };
 
-  return JSON.parse(jsonText) as ActionIntentResult;
+  try {
+    const parsed = JSON.parse(jsonText) as IntentResult;
+    const conf = Math.max(0, Math.min(1, Number(parsed.confidence ?? 0)));
+    return { intent: parsed.intent ?? "unknown", confidence: conf };
+  } catch {
+    return { intent: "unknown", confidence: 0 };
+  }
 }
