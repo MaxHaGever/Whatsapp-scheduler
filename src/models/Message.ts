@@ -13,7 +13,7 @@ const MessageSchema = new Schema(
     body: { type: String, required: true },
 
     // Meta message id (returned when you send) or inbound id if available
-    waMessageId: { type: String, default: null, index: true },
+    waMessageId: { type: String, default: null },
 
     status: { type: String, default: "unknown", index: true },
 
@@ -26,7 +26,7 @@ const MessageSchema = new Schema(
   { timestamps: true }
 );
 MessageSchema.index({ contactId: 1, createdAt: 1 });
-MessageSchema.index({ businessId: 1, createdAt: -1 });
+MessageSchema.index({ businessId: 1, waMessageId: 1 }, { unique: true, sparse: true });
 MessageSchema.index({ waMessageId: 1 }, { unique: true, sparse: true });
 
 export type Message = InferSchemaType<typeof MessageSchema> & { _id: Types.ObjectId };
