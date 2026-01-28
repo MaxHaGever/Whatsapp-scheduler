@@ -8,12 +8,15 @@ export interface AuthenticateRequest extends Request {
   businessId?: string;
 }
 
-export const protect = (
-  req: AuthenticateRequest,
-  res: Response,
-  next: NextFunction
-) => {
-  const authHeader = req.header("authorization");
+type JwtPayload = {
+  userId: string;
+  businessId?: string;
+};
+
+export const protect = (req: AuthenticateRequest, res: Response, next: NextFunction) => {
+  const authHeader =
+    (req.headers.authorization as string | undefined) ??
+    (req.headers.Authorization as string | undefined);
 
   if (!authHeader || !authHeader.startsWith("Bearer ")) {
     return res.status(401).json({ message: "No token" });
@@ -22,16 +25,16 @@ export const protect = (
   const token = authHeader.split(" ")[1];
 
   try {
-    const decoded = jwt.verify(token, JWT_SECRET) as {
-      userId: string;
-      businessId: string;
-    };
+    const decoded = jwt.verify(token, JWT_SECRET) as JwtPayload;
 
     req.userId = decoded.userId;
-    req.businessId = decoded.businessId;
+    if (decoded.businessId) req.businessId = decoded.businessId;
 
-    next();
+    return next();
   } catch {
     return res.status(401).json({ message: "Invalid Token" });
   }
 };
+
+// Backwards-compatible name (so routes can import requireAuth)
+export const requireAuth = protect;
