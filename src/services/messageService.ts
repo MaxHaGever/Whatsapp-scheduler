@@ -1,60 +1,79 @@
-import { BusinessModel } from "../models/Business"; 
+import { BusinessModel } from "../models/Business";
 import { ContactModel } from "../models/Contact";
 import { MessageModel, MessageDirection, MessageStatus } from "../models/Message";
 import { sendTextMessage } from "./whatsapp";
 
 type EnsureContext = {
-    businessId: string;
-    waId: string;
+  businessId: string;
+  waId: string;
+};
+
+async function getOrCreateContact({ businessId, waId }: EnsureContext) {
+  const now = new Date();
+
+  const contact = await ContactModel.findOneAndUpdate(
+    { businessId, waId },
+    { lastSeen: now },
+    { new: true, upsert: true }
+  );
+
+  return contact;
 }
 
-async function getOrCreateContact ({businessId, waId}: EnsureContext) {
-    const now = new Date();
-
-    const contact = await ContactModel.findOneAndUpdate(
-        { businessId, waId },
-        { lastSeen: now },
-        { new: true, upsert: true }
-    );
-
-    return contact;
-}
-
+/**
+ * Dev convenience only.
+ * In production, webhook routing should always find business by whatsappPhoneNumberId.
+ */
 export async function getDefaultBusinessId(): Promise<string> {
   const name = process.env.DEFAULT_BUSINESS_NAME || "Default Business";
   const timezone = process.env.DEFAULT_TZ || "Asia/Jerusalem";
 
-  // This should be your TEST phone_number_id from Meta
-  const phoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID;
+  // For local testing you can set your Meta TEST phone_number_id here
+  const testPhoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID;
 
-  // If you don't have it, fallback by name (dev convenience)
-  if (!phoneNumberId) {
+  // If env not set, fallback by name
+  if (!testPhoneNumberId) {
     const existingByName = await BusinessModel.findOne({ name });
     if (existingByName) return String(existingByName._id);
 
     const created = await BusinessModel.create({
       name,
       timezone,
-      phoneNumberId: null,
-      wabaId: null,
+      whatsappPhoneNumberId: null,
+      whatsappWabaId: null,
+      whatsappAccessToken: null,
+      whatsappConnected: false,
     });
     return String(created._id);
   }
 
-  // Prefer matching by phoneNumberId (this matches webhook routing)
-  const existingByPhone = await BusinessModel.findOne({ phoneNumberId });
-  if (existingByPhone) return String(existingByPhone._id);
+  // Prefer matching by *production* field (so webhook routing & replies match reality)
+  const existingByProdField = await BusinessModel.findOne({
+    whatsappPhoneNumberId: testPhoneNumberId,
+  });
+  if (existingByProdField) return String(existingByProdField._id);
+
+  // Backward compat fallback if an older doc exists
+  const existingByOldField = await BusinessModel.findOne({ phoneNumberId: testPhoneNumberId });
+  if (existingByOldField) return String(existingByOldField._id);
 
   const created = await BusinessModel.create({
     name,
     timezone,
-    phoneNumberId,
-    wabaId: null, // optional: fill later if you add it to env
+
+    // keep older fields empty
+    phoneNumberId: null,
+    wabaId: null,
+
+    // new fields
+    whatsappPhoneNumberId: testPhoneNumberId,
+    whatsappWabaId: null,
+    whatsappAccessToken: process.env.WHATSAPP_ACCESS_TOKEN ?? null, // optional dev helper
+    whatsappConnected: Boolean(process.env.WHATSAPP_ACCESS_TOKEN),
   });
 
   return String(created._id);
 }
-
 
 export async function saveInboundMessage(args: {
   businessId: string;
@@ -68,7 +87,7 @@ export async function saveInboundMessage(args: {
 
   const waMessageId = args.waMessageId ?? null;
 
-  // ✅ DEDUPE: if Meta retries webhook, skip if already stored
+  // DEDUPE: if Meta retries webhook, skip if already stored
   if (waMessageId) {
     const existing = await MessageModel.findOne({
       businessId: args.businessId,
@@ -90,7 +109,6 @@ export async function saveInboundMessage(args: {
   });
 }
 
-
 export async function sendAndStoreTextMessage(args: {
   businessId: string;
   waId: string;
@@ -99,9 +117,12 @@ export async function sendAndStoreTextMessage(args: {
 }) {
   const contact = await getOrCreateContact({ businessId: args.businessId, waId: args.waId });
 
-  // Send to Meta
-  const result = await sendTextMessage({ businessId: args.businessId, to: args.waId, text: args.body });
-
+  // ✅ Multi-tenant send: uses DB credentials for this business
+  const result = await sendTextMessage({
+    businessId: args.businessId,
+    to: args.waId,
+    text: args.body,
+  });
 
   // Save to Mongo
   const doc = await MessageModel.create({
@@ -118,10 +139,10 @@ export async function sendAndStoreTextMessage(args: {
   return { result, doc };
 }
 
-export async function updateMessageStatusByWaMessageId(businessId: string, waMessageId: string, status: MessageStatus) {
-  // update the latest message with that id
-  await MessageModel.updateOne(
-    { waMessageId, businessId },
-    { $set: { status } }
-  );
+export async function updateMessageStatusByWaMessageId(
+  businessId: string,
+  waMessageId: string,
+  status: MessageStatus
+) {
+  await MessageModel.updateOne({ waMessageId, businessId }, { $set: { status } });
 }

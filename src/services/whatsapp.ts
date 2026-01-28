@@ -17,25 +17,22 @@ export async function sendTextMessage(args: {
   to: string;
   text: string;
 }): Promise<WhatsAppSendResult> {
-  const { businessId, to } = args;
+  const { businessId, to, text } = args;
 
-  // Load WhatsApp credentials for THIS business
   const business = await BusinessModel.findById(businessId).select(
-    "whatsappPhoneNumberId whatsappAccessToken whatsappConnected phoneNumberId wabaId"
+    "whatsappPhoneNumberId whatsappAccessToken whatsappConnected phoneNumberId"
   );
 
   if (!business) throw new Error("Business not found");
 
   // Prefer production fields
-  let token = business.whatsappAccessToken ?? undefined;
-  let phoneNumberId = business.whatsappPhoneNumberId ?? undefined;
+  let token: string | undefined = business.whatsappAccessToken ?? undefined;
+  let phoneNumberId: string | undefined = business.whatsappPhoneNumberId ?? undefined;
 
-  // Optional dev fallback: allow old schema or env vars (helps during migration)
-  if (!token || !phoneNumberId) {
-    // fallback 1: old fields (if you used them previously)
-    if (!phoneNumberId && business.phoneNumberId) phoneNumberId = business.phoneNumberId;
-    if (!token && process.env.WHATSAPP_ACCESS_TOKEN) token = process.env.WHATSAPP_ACCESS_TOKEN;
-  }
+  // Backward-compat / dev migration fallback
+  if (!phoneNumberId && business.phoneNumberId) phoneNumberId = business.phoneNumberId;
+  if (!token && process.env.WHATSAPP_ACCESS_TOKEN) token = process.env.WHATSAPP_ACCESS_TOKEN;
+  if (!phoneNumberId && process.env.WHATSAPP_PHONE_NUMBER_ID) phoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID;
 
   if (!token || !phoneNumberId) {
     throw new Error(
@@ -44,7 +41,7 @@ export async function sendTextMessage(args: {
   }
 
   const build = process.env.APP_BUILD || "NO_BUILD";
-  const finalBody = `[${build}] ${args.text}`;
+  const finalBody = `[${build}] ${text}`;
 
   const graphVersion = process.env.WHATSAPP_GRAPH_VERSION || "v24.0";
   const url = `https://graph.facebook.com/${graphVersion}/${phoneNumberId}/messages`;

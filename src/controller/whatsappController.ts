@@ -44,7 +44,10 @@ export async function handleWebhookPost(req: Request, res: Response) {
         if (!phoneNumberId) continue;
 
         // resolve businessId
-        const businessDoc = await BusinessModel.findOne({ phoneNumberId }).lean();
+        const businessDoc =
+        (await BusinessModel.findOne({ whatsappPhoneNumberId: phoneNumberId }).lean()) ||
+        (await BusinessModel.findOne({ phoneNumberId }).lean()); // backward compat
+
         let businessId: string;
 
         if (businessDoc) {
