@@ -24,16 +24,23 @@ export function createApp() {
     const origin = req.headers?.origin as string | undefined;
 
     // Allow server-to-server / tools with no Origin header (webhooks, curl, Postman)
-    if (!origin) {
-      return callback(null, { origin: true, credentials: true });
-    }
+    if (!origin) return callback(null, { origin: true, credentials: true });
 
     const isAllowed = allowedOrigins.includes(origin);
     return callback(null, { origin: isAllowed, credentials: true });
   };
 
-  app.use(cors(corsOptionsDelegate));
-  app.options("/.*/", cors(corsOptionsDelegate));
+  const corsMiddleware = cors(corsOptionsDelegate);
+
+  // Apply CORS to all requests (including OPTIONS)
+  app.use(corsMiddleware);
+
+  // IMPORTANT: Avoid app.options("*"...) / regex patterns that crash with your router/path-to-regexp.
+  // Handle preflight generically, after CORS headers are set by corsMiddleware.
+  app.use((req, res, next) => {
+    if (req.method === "OPTIONS") return res.sendStatus(204);
+    return next();
+  });
 
   app.use(express.json());
 
@@ -45,15 +52,13 @@ export function createApp() {
   app.use("/api/business", businessRoutes);
   app.use("/api/calendar", calendarRoutes);
 
-  // ---- Google OAuth callback (must match GOOGLE_REDIRECT_URI path) ----
+  // ---- Google OAuth callback ----
   app.get("/oauth2callback", handleGoogleOAuthCallbackMultiTenant);
 
   // ---- Webhooks ----
   app.use("/webhook/whatsapp", whatsappRoutes);
 
-  // Keep googleRoutes AFTER callback so it can't override /oauth2callback
   app.use(googleRoutes);
-
   app.use("/debug", debugeRoutes);
 
   return app;
