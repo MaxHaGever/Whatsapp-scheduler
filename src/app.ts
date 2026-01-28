@@ -1,5 +1,6 @@
 import express from "express";
-import cors, { CorsOptionsDelegate } from "cors";
+import cors = require("cors");
+import type { CorsOptionsDelegate } from "cors";
 
 import whatsappRoutes from "./routes/whatsappRoutes";
 import googleRoutes from "./routes/googleRoutes";
@@ -20,15 +21,14 @@ export function createApp() {
   ];
 
   const corsOptionsDelegate: CorsOptionsDelegate = (req, callback) => {
-    const originHeader = req.headers["origin"];
-    const origin = Array.isArray(originHeader) ? originHeader[0] : originHeader;
+    const origin = req.headers?.origin as string | undefined;
 
-    // Allow non-browser tools / server-to-server calls (WhatsApp webhooks, curl, Postman)
+    // Allow server-to-server / tools with no Origin header (webhooks, curl, Postman)
     if (!origin) {
       return callback(null, { origin: true, credentials: true });
     }
 
-    const isAllowed = allowedOrigins.includes(origin as string);
+    const isAllowed = allowedOrigins.includes(origin);
     return callback(null, { origin: isAllowed, credentials: true });
   };
 
