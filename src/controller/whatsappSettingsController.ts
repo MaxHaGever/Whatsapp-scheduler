@@ -39,13 +39,29 @@ export async function connectWhatsApp(req: AuthedRequest, res: Response) {
     });
   }
 
+  const waba = String(wabaId).trim();
+  const pnid = String(phoneNumberId).trim();
+  const token = String(accessToken).trim();
+
   try {
+    // ✅ PRE-CHECK: avoid E11000 and give a friendly 409
+    const existing = await Business.findOne({
+      whatsappPhoneNumberId: pnid,
+      _id: { $ne: businessId },
+    }).select("_id");
+
+    if (existing) {
+      return res.status(409).json({
+        message: "This phoneNumberId is already connected to another business in the system.",
+      });
+    }
+
     const updated = await Business.findByIdAndUpdate(
       businessId,
       {
-        whatsappWabaId: String(wabaId).trim(),
-        whatsappPhoneNumberId: String(phoneNumberId).trim(),
-        whatsappAccessToken: String(accessToken).trim(),
+        whatsappWabaId: waba,
+        whatsappPhoneNumberId: pnid,
+        whatsappAccessToken: token,
         whatsappConnected: true,
       },
       { new: true, runValidators: true }
@@ -60,17 +76,29 @@ export async function connectWhatsApp(req: AuthedRequest, res: Response) {
       updatedAt: updated.updatedAt,
     });
   } catch (err: any) {
-    // Handle duplicate key for phoneNumberId uniqueness
-    const msg = String(err?.message ?? "");
-    if (msg.includes("E11000") && msg.includes("whatsappPhoneNumberId")) {
+    // ✅ Robust duplicate key handling
+    if (err?.code === 11000) {
+      const key = Object.keys(err?.keyPattern ?? {})[0] || Object.keys(err?.keyValue ?? {})[0];
+      if (key) {
+        return res.status(409).json({
+          message: `Duplicate key: ${key} is already used by another business.`,
+          key,
+          value: err?.keyValue?.[key],
+        });
+      }
+
       return res.status(409).json({
-        message:
-          "This phoneNumberId is already connected to another business in the system.",
+        message: "Duplicate key error: WhatsApp identifiers already used by another business.",
       });
     }
-    return res.status(500).json({ message: "Failed to connect WhatsApp", error: msg });
+
+    return res.status(500).json({
+      message: "Failed to connect WhatsApp",
+      error: String(err?.message ?? err),
+    });
   }
 }
+
 
 export async function sendWhatsAppTestMessage(req: AuthedRequest, res: Response) {
   const businessId = requireBusinessId(req);

@@ -1,4 +1,5 @@
 import axios from "axios";
+import { BusinessModel } from "../models/Business";
 
 type WhatsAppSendResponse = {
   messages?: Array<{ id: string }>;
@@ -11,20 +12,42 @@ export type WhatsAppSendResult = {
   sentAt: string;
 };
 
-export async function sendTextMessage(to: string, body: string): Promise<WhatsAppSendResult> {
-  const token = process.env.WHATSAPP_ACCESS_TOKEN;
-  const phoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID;
+export async function sendTextMessage(args: {
+  businessId: string;
+  to: string;
+  text: string;
+}): Promise<WhatsAppSendResult> {
+  const { businessId, to } = args;
 
+  // Load WhatsApp credentials for THIS business
+  const business = await BusinessModel.findById(businessId).select(
+    "whatsappPhoneNumberId whatsappAccessToken whatsappConnected phoneNumberId wabaId"
+  );
+
+  if (!business) throw new Error("Business not found");
+
+  // Prefer production fields
+  let token = business.whatsappAccessToken ?? undefined;
+  let phoneNumberId = business.whatsappPhoneNumberId ?? undefined;
+
+  // Optional dev fallback: allow old schema or env vars (helps during migration)
   if (!token || !phoneNumberId) {
-    throw new Error("Missing WHATSAPP_ACCESS_TOKEN or WHATSAPP_PHONE_NUMBER_ID in env.");
+    // fallback 1: old fields (if you used them previously)
+    if (!phoneNumberId && business.phoneNumberId) phoneNumberId = business.phoneNumberId;
+    if (!token && process.env.WHATSAPP_ACCESS_TOKEN) token = process.env.WHATSAPP_ACCESS_TOKEN;
   }
 
-  // Build marker (so we can prove which deployment is responding)
-  const build = process.env.APP_BUILD || "NO_BUILD";
-  const finalBody = `[${build}] ${body}`;
+  if (!token || !phoneNumberId) {
+    throw new Error(
+      "WhatsApp not connected for this business (missing whatsappAccessToken / whatsappPhoneNumberId)."
+    );
+  }
 
-  // Use latest Graph version (v24.0 is current in your logs)
-  const url = `https://graph.facebook.com/v24.0/${phoneNumberId}/messages`;
+  const build = process.env.APP_BUILD || "NO_BUILD";
+  const finalBody = `[${build}] ${args.text}`;
+
+  const graphVersion = process.env.WHATSAPP_GRAPH_VERSION || "v24.0";
+  const url = `https://graph.facebook.com/${graphVersion}/${phoneNumberId}/messages`;
 
   try {
     const resp = await axios.post<WhatsAppSendResponse>(
@@ -45,11 +68,9 @@ export async function sendTextMessage(to: string, body: string): Promise<WhatsAp
     );
 
     const id = resp.data?.messages?.[0]?.id ?? null;
-    if (id) {
-      console.log(`[WA SEND] id=${id} to=${to}`);
-    } else {
-      console.log(`[WA SEND] to=${to} (no message id returned)`);
-    }
+
+    if (id) console.log(`[WA SEND] business=${businessId} phoneNumberId=${phoneNumberId} id=${id}`);
+    else console.log(`[WA SEND] business=${businessId} phoneNumberId=${phoneNumberId} (no id)`);
 
     return {
       waMessageId: id,
@@ -58,14 +79,11 @@ export async function sendTextMessage(to: string, body: string): Promise<WhatsAp
       sentAt: new Date().toISOString(),
     };
   } catch (err: any) {
-    // Log useful error details from Meta
     const status = err?.response?.status;
     const data = err?.response?.data;
     console.error("[WHATSAPP_SEND_ERROR]", status, JSON.stringify(data ?? {}, null, 2));
     throw new Error(
-      `WhatsApp send failed (HTTP ${status ?? "?"}): ${
-        data?.error?.message ?? err?.message ?? "unknown error"
-      }`
+      `WhatsApp send failed (HTTP ${status ?? "?"}): ${data?.error?.message ?? err?.message ?? "unknown"}`
     );
   }
 }

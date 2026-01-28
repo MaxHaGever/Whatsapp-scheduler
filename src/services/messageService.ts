@@ -100,7 +100,8 @@ export async function sendAndStoreTextMessage(args: {
   const contact = await getOrCreateContact({ businessId: args.businessId, waId: args.waId });
 
   // Send to Meta
-  const result = await sendTextMessage(args.waId, args.body);
+  const result = await sendTextMessage({ businessId: args.businessId, to: args.waId, text: args.body });
+
 
   // Save to Mongo
   const doc = await MessageModel.create({

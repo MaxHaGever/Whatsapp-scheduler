@@ -5,17 +5,29 @@ const BusinessSchema = new Schema(
     name: { type: String, required: true },
     timezone: { type: String, default: "Asia/Jerusalem" },
 
-    // WhatsApp Cloud API identifiers
+    /**
+     * Backward-compat fields (you already used these earlier)
+     * Keep them so old data doesn't break.
+     */
     phoneNumberId: { type: String, required: false, unique: true, sparse: true },
     wabaId: { type: String, default: null },
+
+    /**
+     * Production fields (new multi-tenant WhatsApp)
+     */
+    whatsappPhoneNumberId: { type: String, required: false, unique: true, sparse: true },
+    whatsappWabaId: { type: String, default: null },
+    whatsappAccessToken: { type: String, default: null },
+    whatsappConnected: { type: Boolean, default: false },
   },
   { timestamps: true }
 );
 
 export type Business = InferSchemaType<typeof BusinessSchema>;
 
+// Named export that matches your imports
 export const BusinessModel =
   mongoose.models.Business || mongoose.model("Business", BusinessSchema);
 
-// ALSO export default for other files that import default
+// Default export for older imports
 export default BusinessModel;
