@@ -33,7 +33,7 @@ export function createApp() {
   };
 
   app.use(cors(corsOptionsDelegate));
-  app.options("*", cors(corsOptionsDelegate));
+  app.options("/.*/", cors(corsOptionsDelegate));
 
   app.use(express.json());
 
